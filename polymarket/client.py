@@ -11,7 +11,7 @@ from typing import Optional
 
 import requests
 
-from polymarket.auth import get_api_credentials, get_chain_id, get_clob_host
+from polymarket.auth import get_api_credentials, get_chain_id, get_clob_host, get_funder_address
 from polymarket.endpoints import (
     CLOB_BALANCE,
     CLOB_BOOK,
@@ -57,6 +57,7 @@ class PolymarketClient:
         self._creds = get_api_credentials(require_pk=require_pk)
         self._chain_id = get_chain_id()
         self._host = get_clob_host()
+        self._funder = get_funder_address()
         self._session = requests.Session()
         self._session.headers.update({"Content-Type": "application/json"})
 
@@ -67,6 +68,7 @@ class PolymarketClient:
                     host=self._host,
                     chain_id=self._chain_id,
                     key=self._creds["pk"],
+                    funder=self._funder,
                     creds=ApiCreds(
                         api_key=self._creds["api_key"],
                         api_secret=self._creds["api_secret"],
@@ -75,6 +77,7 @@ class PolymarketClient:
                     if self._creds.get("api_key")
                     else None,
                 )
+                logger.debug("ClobClient initialised for funder %s", self._funder)
             except Exception as exc:
                 logger.warning(
                     "ClobClient init failed (order placement unavailable): %s", exc

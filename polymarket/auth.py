@@ -56,6 +56,24 @@ def get_api_credentials(require_pk: bool = True) -> dict[str, str]:
     }
 
 
+def get_funder_address() -> str:
+    """Return the Polymarket funder (wallet) address from environment variables.
+
+    The funder is the Ethereum EOA address that owns the USDC on Polygon and
+    is linked to your Polymarket account.  ``py-clob-client`` uses this when
+    the signing key (``PK``) is a delegated proxy key rather than the main
+    wallet key.
+
+    Pre-configured default: ``0xe95ce742AfC2977965998810f326192D1593c1E1``
+
+    Override via the ``POLYMARKET_FUNDER_ADDRESS`` environment variable.
+    """
+    return os.environ.get(
+        "POLYMARKET_FUNDER_ADDRESS",
+        "0xe95ce742AfC2977965998810f326192D1593c1E1",
+    )
+
+
 def get_chain_id() -> int:
     """Return the chain ID for Polygon (137) or override via env."""
     return int(os.environ.get("CHAIN_ID", "137"))
