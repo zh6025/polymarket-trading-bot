@@ -57,7 +57,7 @@ Vultr 的 **Startup Script** 功能可以在服务器**第一次启动时**自�
 
    ```bash
    #!/usr/bin/env bash
-   # Polymarket Trading Bot – Vultr Startup Script
+   # Polymarket Trading Bot - Vultr Startup Script
    set -euo pipefail
 
    LOG_FILE="/var/log/polymarket-bot-setup.log"
@@ -69,7 +69,7 @@ Vultr 的 **Startup Script** 功能可以在服务器**第一次启动时**自�
    BOT_USER="polybot"
 
    echo "============================================================"
-   echo " Polymarket Trading Bot – Vultr Startup Script"
+   echo " Polymarket Trading Bot - Vultr Startup Script"
    echo " Started at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
    echo " Log file  : ${LOG_FILE}"
    echo "============================================================"
@@ -104,7 +104,7 @@ Vultr 的 **Startup Script** 功能可以在服务器**第一次启动时**自�
        EXPECTED_STRIPPED=$(echo "${EXPECTED_FINGERPRINT}" | tr -d ' ')
        if [[ "${ACTUAL_FINGERPRINT}" != "${EXPECTED_STRIPPED}" ]]; then
            rm -f "${DOCKER_GPG_FILE}"
-           echo "ERROR: Docker GPG fingerprint mismatch – aborting."; exit 1
+           echo "ERROR: Docker GPG fingerprint mismatch - aborting."; exit 1
        fi
        echo "      Docker GPG key fingerprint verified"
        echo "deb [arch=$(dpkg --print-architecture) signed-by=${DOCKER_GPG_FILE}] \
@@ -148,7 +148,7 @@ Vultr 的 **Startup Script** 功能可以在服务器**第一次启动时**自�
        cp "${INSTALL_DIR}/.env.dry_run" "${ENV_FILE}"
        chown "${BOT_USER}:${BOT_USER}" "${ENV_FILE}"
        chmod 600 "${ENV_FILE}"
-       echo "      .env created (DRY RUN mode – no real orders)"
+       echo "      .env created (DRY RUN mode - no real orders)"
    fi
 
    echo "[8/8] Installing systemd service '${SERVICE_NAME}'..."
@@ -184,11 +184,11 @@ Vultr 的 **Startup Script** 功能可以在服务器**第一次启动时**自�
 
    echo ""
    echo "============================================================"
-   echo " Setup complete!  部署完成！"
+   echo " Setup complete!"
    echo " Finished at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
    echo " Log file: ${LOG_FILE}"
    echo "============================================================"
-   echo " Next: ssh root@YOUR_IP  →  nano ${INSTALL_DIR}/.env"
+   echo " Next: ssh root@YOUR_IP -> nano ${INSTALL_DIR}/.env"
    ```
 
 4. 点击 **"Save"**
@@ -248,7 +248,7 @@ tail -f /var/log/polymarket-bot-setup.log
 
 ```
 ============================================================
- Setup complete!  部署完成！
+ Setup complete!
 ============================================================
 ```
 
