@@ -117,17 +117,66 @@ Polymarket 的 CLOB 服务器位于美国东部，Binance WebSocket 延迟也越
 
 | 供应商 | 推荐地区 | 最低配置 | 月费（约） | 备注 |
 |---|---|---|---|---|
-| **[Vultr](https://www.vultr.com)** | New Jersey (美国东) | 1 vCPU / 1 GB RAM / 25 GB SSD | $6 | 按小时计费，随时可关 |
-| **[DigitalOcean](https://www.digitalocean.com)** | New York 1/3 | 1 vCPU / 1 GB RAM / 25 GB SSD | $6 | 文档最完善，适合新手 |
+| **[DigitalOcean](https://www.digitalocean.com)** | New York 1/3 | 1 vCPU / 1 GB RAM / 25 GB SSD | $6 | **推荐首选**，VPN 友好，文档完善 |
+| **[Vultr](https://www.vultr.com)** | New Jersey (美国东) | 1 vCPU / 1 GB RAM / 25 GB SSD | $6 | 按小时计费，支持加密货币付款 |
 | **[Hetzner](https://www.hetzner.com/cloud)** | Falkenstein / Helsinki | CX22: 2 vCPU / 4 GB RAM / 40 GB SSD | €4 | 欧洲最便宜，性价比最高 |
 | **[Linode / Akamai](https://www.linode.com)** | Newark (美国东) | 1 vCPU / 1 GB RAM / 25 GB SSD | $5 | 稳定可靠 |
 | **[AWS Lightsail](https://lightsail.aws.amazon.com)** | us-east-1 (弗吉尼亚) | 1 vCPU / 1 GB RAM / 40 GB SSD | $5 | 与 Polymarket 最近 |
 
-> **推荐首选**: Vultr New Jersey — $6/月，延迟最低，支持"Startup Script"全自动部署。
+> **推荐首选**: DigitalOcean New York — $6/月，延迟低，对中国大陆 / VPN 用户访问更稳定，支持 User Data 全自动部署。
+>
+> Vultr 部分地区在 VPN 环境下控制台响应不稳定；如遇此问题请改用 DigitalOcean。
 
-### ⚡ Vultr 部署（最快方式，约 3 分钟完成）| Vultr Quick Deploy
+### ⚡ DigitalOcean 部署（推荐，约 3 分钟完成）| DigitalOcean Quick Deploy
+
+> 📖 完整图文教程见 **[docs/digitalocean-deploy.md](docs/digitalocean-deploy.md)**
+
+**三步完成部署，无需任何命令行操作：**
+
+**① 注册 DigitalOcean 账号**
+
+前往 <https://cloud.digitalocean.com/registrations/new> 注册（信用卡 / PayPal，新账户通常有 $200 免费额度）。
+
+**② 获取 User Data 脚本**
+
+打开 **[docs/digitalocean-deploy.md](docs/digitalocean-deploy.md#第二步获取-user-data-脚本)** 文档，复制其中的代码框内容备用。
+
+**③ 创建 Droplet（服务器）**
+
+点击右上角 **Create** -> **Droplets**，配置如下：
+
+| 设置 | 推荐值 |
+|---|---|
+| Region | **New York 1** 或 **New York 3** |
+| Image | **Ubuntu 22.04 LTS** |
+| Plan | **Basic / Regular – $6/mo** (1 vCPU / 1 GB / 25 GB SSD) |
+| Advanced Options | ✅ **勾选 "Add initialization scripts"** <- 将脚本粘贴进去！|
+
+点击 **Create Droplet** -> 等待约 1 分钟 -> SSH 登录：
+
+```bash
+ssh root@你的Droplet_IP
+```
+
+登录后机器人已在**模拟模式**运行。查看安装日志：
+
+```bash
+tail -f /var/log/polymarket-bot-setup.log
+```
+
+填入 API 密钥后切换实盘：
+
+```bash
+nano /opt/polymarket-bot/.env          # 填写 PK / CLOB_API_KEY / CLOB_SECRET / CLOB_PASSPHRASE
+systemctl restart polymarket-bot       # 重启生效
+journalctl -u polymarket-bot -f        # 查看实时日志
+```
+
+### Vultr 部署（备选方案）| Vultr Quick Deploy
 
 > 📖 完整图文教程见 **[docs/vultr-deploy.md](docs/vultr-deploy.md)**
+
+> ⚠️ 若在 VPN 环境下 Vultr 控制台点击无响应，请改用上方的 DigitalOcean 方案。
 
 **三步完成部署，无需任何命令行操作：**
 
@@ -137,18 +186,18 @@ Polymarket 的 CLOB 服务器位于美国东部，Binance WebSocket 延迟也越
 
 **② 添加 Startup Script（一次性操作）**
 
-登录后：左侧菜单 **产品** → **管弦乐（Orchestration）** → **脚本（Scripts）** → **Add Startup Script**
+登录后：左侧菜单 **产品** -> **管弦乐（Orchestration）** -> **脚本（Scripts）** -> **Add Startup Script**
 
-> ⚠️ 新版 Vultr 控制台已将 "Startup Scripts" 移至 **产品 → 管弦乐 → 脚本**（不在顶层侧边栏）。
+> ⚠️ 新版 Vultr 控制台已将 "Startup Scripts" 移至 **产品 -> 管弦乐 -> 脚本**（不在顶层侧边栏）。
 
 - Name: `polymarket-bot-setup`
 - Type: `Boot`
-- Script: 打开 **[docs/vultr-deploy.md](docs/vultr-deploy.md#第二步添加-startup-script)** 文档，复制其中的代码框内容粘贴进去 →
-  点击 **Save**
+- Script: 打开 **[docs/vultr-deploy.md](docs/vultr-deploy.md#第二步添加-startup-script)** 文档，复制其中的代码框内容粘贴进去 ->
+  点击 **Save**（脚本只含 ASCII 字符，可正常保存）
 
 **③ 创建服务器**
 
-左侧菜单 **产品** → **计算（Compute）** → **实例（Instances）** → **Deploy Instance**，配置如下：
+左侧菜单 **产品** -> **计算（Compute）** -> **实例（Instances）** -> **Deploy Instance**，配置如下：
 
 | 设置 | 推荐值 |
 |---|---|
@@ -156,13 +205,13 @@ Polymarket 的 CLOB 服务器位于美国东部，Binance WebSocket 延迟也越
 | Location | **New Jersey (EWR)** |
 | Image | **Ubuntu 22.04 LTS** |
 | Plan | **$6/mo** (1 vCPU / 1 GB / 25 GB SSD) |
-| Startup Script | **polymarket-bot-setup** ← 一定要选！|
+| Startup Script | **polymarket-bot-setup** <- 一定要选！|
 
-点击 **Deploy Now** → 等待约 2–3 分钟 → SSH 登录：
+点击 **Deploy Now** -> 等待约 2-3 分钟 -> SSH 登录：
 
 ```bash
 ssh root@你的服务器IP
-# 密码在 Vultr 控制台 → Instances → 你的服务器 → Overview
+# 密码在 Vultr 控制台 -> Instances -> 你的服务器 -> Overview
 ```
 
 登录后机器人已在**模拟模式**运行。查看安装日志：
