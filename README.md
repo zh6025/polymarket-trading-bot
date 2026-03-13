@@ -137,7 +137,9 @@ Polymarket 的 CLOB 服务器位于美国东部，Binance WebSocket 延迟也越
 
 **② 添加 Startup Script（一次性操作）**
 
-登录后：左侧菜单 → **Startup Scripts** → **Add Startup Script**
+登录后：左侧菜单 **产品** → **管弦乐（Orchestration）** → **脚本（Scripts）** → **Add Startup Script**
+
+> ⚠️ 新版 Vultr 控制台已将 "Startup Scripts" 移至 **产品 → 管弦乐 → 脚本**（不在顶层侧边栏）。
 
 - Name: `polymarket-bot-setup`
 - Type: `Boot`
@@ -146,7 +148,7 @@ Polymarket 的 CLOB 服务器位于美国东部，Binance WebSocket 延迟也越
 
 **③ 创建服务器**
 
-左侧 **Instances** → **Deploy Instance**，配置如下：
+左侧菜单 **产品** → **计算（Compute）** → **实例（Instances）** → **Deploy Instance**，配置如下：
 
 | 设置 | 推荐值 |
 |---|---|
