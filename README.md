@@ -123,7 +123,59 @@ Polymarket 的 CLOB 服务器位于美国东部，Binance WebSocket 延迟也越
 | **[Linode / Akamai](https://www.linode.com)** | Newark (美国东) | 1 vCPU / 1 GB RAM / 25 GB SSD | $5 | 稳定可靠 |
 | **[AWS Lightsail](https://lightsail.aws.amazon.com)** | us-east-1 (弗吉尼亚) | 1 vCPU / 1 GB RAM / 40 GB SSD | $5 | 与 Polymarket 最近 |
 
-> **推荐首选**: Vultr New Jersey 或 DigitalOcean New York — $6/月，一键部署，延迟最低。
+> **推荐首选**: Vultr New Jersey — $6/月，延迟最低，支持"Startup Script"全自动部署。
+
+### ⚡ Vultr 部署（最快方式，约 3 分钟完成）| Vultr Quick Deploy
+
+> 📖 完整图文教程见 **[docs/vultr-deploy.md](docs/vultr-deploy.md)**
+
+**三步完成部署，无需任何命令行操作：**
+
+**① 注册 Vultr 账号**
+
+前往 <https://my.vultr.com> 注册并添加付款方式（信用卡 / PayPal / 加密货币均可）。
+
+**② 添加 Startup Script（一次性操作）**
+
+登录后：左侧菜单 → **Startup Scripts** → **Add Startup Script**
+
+- Name: `polymarket-bot-setup`
+- Type: `Boot`
+- Script: 复制 [`vultr-startup.sh`](vultr-startup.sh) 的全部内容粘贴进去 →
+  点击 **Save**
+
+**③ 创建服务器**
+
+左侧 **Instances** → **Deploy Instance**，配置如下：
+
+| 设置 | 推荐值 |
+|---|---|
+| Type | Cloud Compute – Shared CPU |
+| Location | **New Jersey (EWR)** |
+| Image | **Ubuntu 22.04 LTS** |
+| Plan | **$6/mo** (1 vCPU / 1 GB / 25 GB SSD) |
+| Startup Script | **polymarket-bot-setup** ← 一定要选！|
+
+点击 **Deploy Now** → 等待约 2–3 分钟 → SSH 登录：
+
+```bash
+ssh root@你的服务器IP
+# 密码在 Vultr 控制台 → Instances → 你的服务器 → Overview
+```
+
+登录后机器人已在**模拟模式**运行。查看安装日志：
+
+```bash
+tail -f /var/log/polymarket-bot-setup.log
+```
+
+填入 API 密钥后切换实盘：
+
+```bash
+nano /opt/polymarket-bot/.env          # 填写 PK / CLOB_API_KEY / CLOB_SECRET / CLOB_PASSPHRASE
+systemctl restart polymarket-bot       # 重启生效
+journalctl -u polymarket-bot -f        # 查看实时日志
+```
 
 ### 系统要求 | Minimum System Requirements
 
