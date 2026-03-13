@@ -16,25 +16,37 @@ import os
 from typing import Optional
 
 
-def get_api_credentials() -> dict[str, str]:
+def get_api_credentials(require_pk: bool = True) -> dict[str, str]:
     """Return CLOB API credentials from environment variables.
 
-    Required environment variables:
+    Required environment variables (for live trading):
       PK              – Ethereum private key (hex, with or without 0x prefix)
       POLYMARKET_API_KEY       – CLOB API key
       POLYMARKET_API_SECRET    – CLOB API secret
       POLYMARKET_API_PASSPHRASE– CLOB API passphrase
+
+    Args:
+        require_pk: When False, a missing PK only logs a warning instead of
+            raising an error.  Set to False for DRY_RUN / read-only usage
+            where order placement is not needed.
     """
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+
     pk = os.environ.get("PK", "")
     api_key = os.environ.get("POLYMARKET_API_KEY", "")
     api_secret = os.environ.get("POLYMARKET_API_SECRET", "")
     api_passphrase = os.environ.get("POLYMARKET_API_PASSPHRASE", "")
 
     if not pk:
-        raise EnvironmentError(
+        msg = (
             "PK (Ethereum private key) is not set. "
-            "Please configure it in your .env file."
+            "Order placement will be unavailable. "
+            "Set PK in your .env file to enable live trading."
         )
+        if require_pk:
+            raise EnvironmentError(msg)
+        _log.warning(msg)
 
     return {
         "pk": pk,

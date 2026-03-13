@@ -537,14 +537,15 @@ def main() -> None:
     client: Optional[PolymarketClient] = None
     if not DRY_RUN:
         try:
-            client = PolymarketClient()
+            client = PolymarketClient(require_pk=True)
         except Exception as exc:
             logger.error("Failed to init Polymarket client: %s", exc)
             sys.exit(1)
     else:
-        # In dry-run we still need the client for order book reads
+        # In dry-run we still need the client for order book reads.
+        # No PK required – order books are public endpoints.
         try:
-            client = PolymarketClient()
+            client = PolymarketClient(require_pk=False)
         except Exception:
             logger.warning(
                 "Polymarket client init failed in DRY RUN – order books unavailable"

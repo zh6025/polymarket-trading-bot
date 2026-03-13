@@ -43,30 +43,42 @@ except ImportError:  # pragma: no cover
 
 
 class PolymarketClient:
-    """High-level client for the Polymarket CLOB API."""
+    """High-level client for the Polymarket CLOB API.
 
-    def __init__(self) -> None:
-        self._creds = get_api_credentials()
+    Operates in two modes:
+    - **Read-only** (no PK): can fetch order books and market data from public
+      endpoints.  Suitable for DRY_RUN mode.
+    - **Full** (PK set): can also place and cancel orders.
+    """
+
+    def __init__(self, require_pk: bool = False) -> None:
+        # require_pk=False: warn (don't raise) when PK is absent – allows
+        # read-only order-book access in DRY_RUN without credentials.
+        self._creds = get_api_credentials(require_pk=require_pk)
         self._chain_id = get_chain_id()
         self._host = get_clob_host()
         self._session = requests.Session()
         self._session.headers.update({"Content-Type": "application/json"})
 
-        if _HAS_PY_CLOB:
-            self._clob = ClobClient(
-                host=self._host,
-                chain_id=self._chain_id,
-                key=self._creds["pk"],
-                creds=ApiCreds(
-                    api_key=self._creds["api_key"],
-                    api_secret=self._creds["api_secret"],
-                    api_passphrase=self._creds["api_passphrase"],
+        self._clob = None
+        if _HAS_PY_CLOB and self._creds.get("pk"):
+            try:
+                self._clob = ClobClient(
+                    host=self._host,
+                    chain_id=self._chain_id,
+                    key=self._creds["pk"],
+                    creds=ApiCreds(
+                        api_key=self._creds["api_key"],
+                        api_secret=self._creds["api_secret"],
+                        api_passphrase=self._creds["api_passphrase"],
+                    )
+                    if self._creds.get("api_key")
+                    else None,
                 )
-                if self._creds["api_key"]
-                else None,
-            )
-        else:
-            self._clob = None
+            except Exception as exc:
+                logger.warning(
+                    "ClobClient init failed (order placement unavailable): %s", exc
+                )
 
     # ------------------------------------------------------------------
     # Order book
