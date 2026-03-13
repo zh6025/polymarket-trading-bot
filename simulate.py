@@ -231,9 +231,8 @@ def _make_sim_order(
 # Single-cycle simulation
 # ══════════════════════════════════════════════════════════════════════════
 
-MARKET_DURATION = 300   # seconds
-TICK_INTERVAL   = 1.0   # simulate 1 second per loop iteration (wall-clock sped up)
-WALL_CLOCK_SPEEDUP = 60  # 1 real second = 60 sim seconds (5-min market in ~5 real seconds)
+MARKET_DURATION = 300   # seconds (one 5-minute market = 300 ticks, each tick = 1 sim-second)
+TICK_INTERVAL   = 1.0   # seconds per simulated tick
 
 DIVERGENCE_THRESHOLD = 0.10
 OPPORTUNITY_PRICE_MAX = 0.20

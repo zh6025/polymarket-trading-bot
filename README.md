@@ -67,14 +67,16 @@ docker compose up -d
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Setup](#setup)
-3. [Configuration Variables](#configuration-variables)
-4. [Running with Docker](#running-with-docker)
-5. [How the Strategy Works](#how-the-strategy-works)
-6. [Daily Loss Limit](#daily-loss-limit)
-7. [DRY RUN Mode](#dry-run-mode)
-8. [Project Structure](#project-structure)
-9. [Running Tests](#running-tests)
+2. [VPS Deployment (推荐部署方式)](#vps-deployment)
+3. [Setup](#setup)
+4. [Configuration Variables](#configuration-variables)
+5. [Running with Docker](#running-with-docker)
+6. [How the Strategy Works](#how-the-strategy-works)
+7. [Daily Loss Limit](#daily-loss-limit)
+8. [DRY RUN Mode](#dry-run-mode)
+9. [Offline Simulation (simulate.py)](#offline-simulation-simulatepy)
+10. [Project Structure](#project-structure)
+11. [Running Tests](#running-tests)
 
 ---
 
@@ -99,6 +101,111 @@ The bot:
   position, and flattens or holds in the final 60 seconds.
 - **Enforces risk limits**: $1 per trade, $10 daily max loss, max 2 entries
   per market, stops trading on repeated API failures.
+
+---
+
+## VPS Deployment
+
+### 推荐的 VPS 供应商 | Recommended VPS Providers
+
+Polymarket 的 CLOB 服务器位于美国东部，Binance WebSocket 延迟也越低越好。
+建议选择**美国东部**或**欧洲**节点。最低配置要求很低 — 机器人是单个 Python 进程。
+
+> Polymarket's CLOB servers are US-based. Lower latency = better price feed
+> freshness. US-East or EU nodes are recommended. Minimum specs are tiny —
+> the bot is a single Python process with a local SQLite file.
+
+| 供应商 | 推荐地区 | 最低配置 | 月费（约） | 备注 |
+|---|---|---|---|---|
+| **[Vultr](https://www.vultr.com)** | New Jersey (美国东) | 1 vCPU / 1 GB RAM / 25 GB SSD | $6 | 按小时计费，随时可关 |
+| **[DigitalOcean](https://www.digitalocean.com)** | New York 1/3 | 1 vCPU / 1 GB RAM / 25 GB SSD | $6 | 文档最完善，适合新手 |
+| **[Hetzner](https://www.hetzner.com/cloud)** | Falkenstein / Helsinki | CX22: 2 vCPU / 4 GB RAM / 40 GB SSD | €4 | 欧洲最便宜，性价比最高 |
+| **[Linode / Akamai](https://www.linode.com)** | Newark (美国东) | 1 vCPU / 1 GB RAM / 25 GB SSD | $5 | 稳定可靠 |
+| **[AWS Lightsail](https://lightsail.aws.amazon.com)** | us-east-1 (弗吉尼亚) | 1 vCPU / 1 GB RAM / 40 GB SSD | $5 | 与 Polymarket 最近 |
+
+> **推荐首选**: Vultr New Jersey 或 DigitalOcean New York — $6/月，一键部署，延迟最低。
+
+### 系统要求 | Minimum System Requirements
+
+```
+OS      : Ubuntu 22.04 LTS 或 24.04 LTS (64-bit)
+CPU     : 1 vCPU（任意型号）
+RAM     : 512 MB 最低，1 GB 推荐
+Disk    : 10 GB（含 Docker 镜像）
+Network : 任意出站网络（需访问 Polymarket、Binance、Polygon RPC）
+```
+
+### 一键部署 | One-Command Deploy (Ubuntu 22.04 / 24.04)
+
+在全新 VPS 上以 root 身份运行以下命令，自动完成所有安装步骤：
+
+```bash
+# 1. SSH into your fresh VPS as root
+ssh root@YOUR_VPS_IP
+
+# 2. Download and run the bootstrap script
+bash <(curl -fsSL https://raw.githubusercontent.com/zh6025/polymarket-trading-bot/main/deploy.sh)
+```
+
+脚本自动完成：
+- ✅ 安装 Docker CE + Docker Compose
+- ✅ 配置防火墙（仅开放 SSH 端口）
+- ✅ 创建独立系统账户 `polybot`（最小权限）
+- ✅ 克隆仓库到 `/opt/polymarket-bot`
+- ✅ 复制 `.env.dry_run` 为初始配置（默认模拟模式，不下单）
+- ✅ 注册 systemd 服务（开机自启动）
+
+### 部署后的步骤 | After Deployment
+
+```bash
+# 1. 编辑配置文件（填入你的密钥）
+nano /opt/polymarket-bot/.env
+
+# 2. 开启实盘交易：将 TRADING_MODE=dry_run 改为 TRADING_MODE=live，然后重启
+systemctl restart polymarket-bot
+
+# 3. 查看实时日志
+journalctl -u polymarket-bot -f
+
+# 4. 查看交易数据
+cd /opt/polymarket-bot && python view_trades.py
+
+# 5. 停止机器人
+systemctl stop polymarket-bot
+
+# 6. 完全卸载
+systemctl disable polymarket-bot
+cd /opt/polymarket-bot && docker compose down -v
+```
+
+### 手动部署（不使用 deploy.sh）| Manual Setup
+
+```bash
+# 1. 安装 Docker（Ubuntu）
+curl -fsSL https://get.docker.com | sh
+systemctl enable --now docker
+
+# 2. 克隆仓库
+git clone https://github.com/zh6025/polymarket-trading-bot.git
+cd polymarket-trading-bot
+
+# 3. 配置环境变量
+cp .env.dry_run .env        # 模拟模式 – 无需密钥
+# 或 cp .env.example .env  # 实盘模式 – 需填写密钥
+
+# 4. 启动
+docker compose up -d
+
+# 5. 查看日志
+docker compose logs -f
+```
+
+### 安全注意事项 | Security Notes
+
+- 🔒 **永远不要** 将 `.env` 文件提交到 Git 仓库（已加入 `.gitignore`）
+- 🔒 建议为 VPS 设置 SSH 密钥登录，禁用密码登录
+- 🔒 `deploy.sh` 已配置防火墙只允许 SSH 入站
+- 🔒 容器以非 root 用户 `botuser` 运行（见 `Dockerfile`）
 
 ---
 
