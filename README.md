@@ -141,7 +141,7 @@ Polymarket 的 CLOB 服务器位于美国东部，Binance WebSocket 延迟也越
 
 - Name: `polymarket-bot-setup`
 - Type: `Boot`
-- Script: 复制 [`vultr-startup.sh`](vultr-startup.sh) 的全部内容粘贴进去 →
+- Script: 打开 **[docs/vultr-deploy.md](docs/vultr-deploy.md#第二步添加-startup-script)** 文档，复制其中的代码框内容粘贴进去 →
   点击 **Save**
 
 **③ 创建服务器**

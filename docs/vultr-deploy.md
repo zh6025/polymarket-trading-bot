@@ -1,6 +1,6 @@
 # 在 Vultr 上部署 Polymarket Trading Bot
 
-> **TL;DR**: 在 Vultr 创建一台 $6/月的服务器，选择 "Startup Script" 粘贴 [`vultr-startup.sh`](../vultr-startup.sh)，服务器启动后机器人自动安装好。
+> **TL;DR**: 在 Vultr 创建一台 $6/月的服务器，在 "Startup Script" 字段粘贴下方 **[第二步](#第二步添加-startup-script)** 中的脚本，服务器启动后机器人自动安装好。
 
 ---
 
@@ -48,10 +48,143 @@ Vultr 的 **Startup Script** 功能可以在服务器**第一次启动时**自�
 3. 填写表单：
    - **Script Name**: `polymarket-bot-setup`
    - **Type**: `Boot`
-   - **Script**: 复制 [`vultr-startup.sh`](../vultr-startup.sh) 的**全部内容**粘贴进去
+   - **Script**: 将下方代码框中的**全部内容**复制后粘贴进去（点击右上角复制按钮，或全选后 Ctrl+C）：
 
-   > 直接从 GitHub Raw 复制：
-   > <https://raw.githubusercontent.com/zh6025/polymarket-trading-bot/main/vultr-startup.sh>
+   ```bash
+   #!/usr/bin/env bash
+   # Polymarket Trading Bot – Vultr Startup Script
+   set -euo pipefail
+
+   LOG_FILE="/var/log/polymarket-bot-setup.log"
+   exec > >(tee -a "${LOG_FILE}") 2>&1
+
+   REPO_URL="https://github.com/zh6025/polymarket-trading-bot.git"
+   INSTALL_DIR="/opt/polymarket-bot"
+   SERVICE_NAME="polymarket-bot"
+   BOT_USER="polybot"
+
+   echo "============================================================"
+   echo " Polymarket Trading Bot – Vultr Startup Script"
+   echo " Started at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+   echo " Log file  : ${LOG_FILE}"
+   echo "============================================================"
+
+   echo "[1/8] Waiting for network connectivity..."
+   for i in $(seq 1 30); do
+       if curl -fsSL --max-time 5 https://github.com > /dev/null 2>&1; then
+           echo "      Network ready after ${i}s"; break
+       fi
+       sleep 1
+   done
+
+   echo "[2/8] Updating system packages..."
+   export DEBIAN_FRONTEND=noninteractive
+   apt-get update -qq
+   apt-get upgrade -y -qq -o Dpkg::Options::="--force-confdef" \
+                           -o Dpkg::Options::="--force-confold"
+   apt-get install -y -qq git curl ufw ca-certificates gnupg lsb-release
+
+   echo "[3/8] Installing Docker CE..."
+   if command -v docker &>/dev/null; then
+       echo "      Docker already installed: $(docker --version)"
+   else
+       install -m 0755 -d /etc/apt/keyrings
+       DOCKER_GPG_URL="https://download.docker.com/linux/ubuntu/gpg"
+       DOCKER_GPG_FILE="/etc/apt/keyrings/docker.gpg"
+       EXPECTED_FINGERPRINT="9DC8 5822 9FC7 DD38 854A  E2D8 8D81 803C 0EBF CD88"
+       curl -fsSL "${DOCKER_GPG_URL}" | gpg --dearmor -o "${DOCKER_GPG_FILE}"
+       chmod a+r "${DOCKER_GPG_FILE}"
+       ACTUAL_FINGERPRINT=$(gpg --no-default-keyring --keyring "${DOCKER_GPG_FILE}" \
+           --fingerprint 2>/dev/null | grep -A1 "pub" | tail -1 | tr -d ' ')
+       EXPECTED_STRIPPED=$(echo "${EXPECTED_FINGERPRINT}" | tr -d ' ')
+       if [[ "${ACTUAL_FINGERPRINT}" != "${EXPECTED_STRIPPED}" ]]; then
+           rm -f "${DOCKER_GPG_FILE}"
+           echo "ERROR: Docker GPG fingerprint mismatch – aborting."; exit 1
+       fi
+       echo "      Docker GPG key fingerprint verified"
+       echo "deb [arch=$(dpkg --print-architecture) signed-by=${DOCKER_GPG_FILE}] \
+   https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+           > /etc/apt/sources.list.d/docker.list
+       apt-get update -qq
+       apt-get install -y -qq docker-ce docker-ce-cli containerd.io \
+           docker-buildx-plugin docker-compose-plugin
+       systemctl enable --now docker
+       echo "      Docker installed: $(docker --version)"
+   fi
+
+   echo "[4/8] Configuring firewall..."
+   ufw --force reset
+   ufw default deny incoming
+   ufw default allow outgoing
+   ufw allow ssh
+   ufw --force enable
+   echo "      Firewall enabled: SSH only"
+
+   echo "[5/8] Creating system user '${BOT_USER}'..."
+   if ! id "${BOT_USER}" &>/dev/null; then
+       useradd --system --shell /bin/false --home "${INSTALL_DIR}" "${BOT_USER}"
+       usermod -aG docker "${BOT_USER}"
+       echo "      User '${BOT_USER}' created"
+   else
+       echo "      User '${BOT_USER}' already exists"
+   fi
+
+   echo "[6/8] Cloning repository..."
+   if [[ -d "${INSTALL_DIR}/.git" ]]; then
+       git -C "${INSTALL_DIR}" pull --ff-only
+   else
+       git clone --depth 1 "${REPO_URL}" "${INSTALL_DIR}"
+   fi
+   chown -R "${BOT_USER}:${BOT_USER}" "${INSTALL_DIR}"
+
+   echo "[7/8] Setting up .env..."
+   ENV_FILE="${INSTALL_DIR}/.env"
+   if [[ ! -f "${ENV_FILE}" ]]; then
+       cp "${INSTALL_DIR}/.env.dry_run" "${ENV_FILE}"
+       chown "${BOT_USER}:${BOT_USER}" "${ENV_FILE}"
+       chmod 600 "${ENV_FILE}"
+       echo "      .env created (DRY RUN mode – no real orders)"
+   fi
+
+   echo "[8/8] Installing systemd service '${SERVICE_NAME}'..."
+   cat > "/etc/systemd/system/${SERVICE_NAME}.service" << 'UNIT'
+   [Unit]
+   Description=Polymarket BTC Up/Down 5-Minute Trading Bot
+   After=network-online.target docker.service
+   Wants=network-online.target
+   Requires=docker.service
+
+   [Service]
+   Type=simple
+   User=polybot
+   Group=polybot
+   WorkingDirectory=/opt/polymarket-bot
+   ExecStartPre=/usr/bin/docker compose pull --quiet || true
+   ExecStart=/usr/bin/docker compose up --build
+   ExecStop=/usr/bin/docker compose down
+   Restart=on-failure
+   RestartSec=30
+   TimeoutStartSec=120
+   TimeoutStopSec=30
+   NoNewPrivileges=yes
+   PrivateTmp=yes
+
+   [Install]
+   WantedBy=multi-user.target
+   UNIT
+
+   systemctl daemon-reload
+   systemctl enable "${SERVICE_NAME}"
+   systemctl start "${SERVICE_NAME}" || true
+
+   echo ""
+   echo "============================================================"
+   echo " Setup complete!  部署完成！"
+   echo " Finished at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+   echo " Log file: ${LOG_FILE}"
+   echo "============================================================"
+   echo " Next: ssh root@YOUR_IP  →  nano ${INSTALL_DIR}/.env"
+   ```
 
 4. 点击 **"Save"**
 
