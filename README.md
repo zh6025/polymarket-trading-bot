@@ -106,30 +106,92 @@ The bot:
 
 ## VPS Deployment
 
-### 推荐的 VPS 供应商 | Recommended VPS Providers
+### 推荐的部署平台 | Recommended Platforms
 
-Polymarket 的 CLOB 服务器位于美国东部，Binance WebSocket 延迟也越低越好。
-建议选择**美国东部**或**欧洲**节点。最低配置要求很低 — 机器人是单个 Python 进程。
+| 平台 | 类型 | 月费（约） | VPN 友好 | 需要 SSH | 备注 |
+|---|---|---|---|---|---|
+| **[Railway](https://railway.com)** | PaaS（托管） | $5 | **最好** | **不需要** | **首选**，GitHub 直接部署，无需管理服务器 |
+| **[DigitalOcean](https://www.digitalocean.com)** | VPS | $6 | 较好 | 需要 | 文档完善，适合 VPS 方案 |
+| **[Vultr](https://www.vultr.com)** | VPS | $6 | 部分受限 | 需要 | 支持加密货币付款 |
+| **[Hetzner](https://www.hetzner.com/cloud)** | VPS | €4 | 较好 | 需要 | 欧洲最便宜 |
+| **[AWS Lightsail](https://lightsail.aws.amazon.com)** | VPS | $5 | 较好 | 需要 | 与 Polymarket 延迟最低 |
 
-> Polymarket's CLOB servers are US-based. Lower latency = better price feed
-> freshness. US-East or EU nodes are recommended. Minimum specs are tiny —
-> the bot is a single Python process with a local SQLite file.
-
-| 供应商 | 推荐地区 | 最低配置 | 月费（约） | 备注 |
-|---|---|---|---|---|
-| **[DigitalOcean](https://www.digitalocean.com)** | New York 1/3 | 1 vCPU / 1 GB RAM / 25 GB SSD | $6 | **推荐首选**，VPN 友好，文档完善 |
-| **[Vultr](https://www.vultr.com)** | New Jersey (美国东) | 1 vCPU / 1 GB RAM / 25 GB SSD | $6 | 按小时计费，支持加密货币付款 |
-| **[Hetzner](https://www.hetzner.com/cloud)** | Falkenstein / Helsinki | CX22: 2 vCPU / 4 GB RAM / 40 GB SSD | €4 | 欧洲最便宜，性价比最高 |
-| **[Linode / Akamai](https://www.linode.com)** | Newark (美国东) | 1 vCPU / 1 GB RAM / 25 GB SSD | $5 | 稳定可靠 |
-| **[AWS Lightsail](https://lightsail.aws.amazon.com)** | us-east-1 (弗吉尼亚) | 1 vCPU / 1 GB RAM / 40 GB SSD | $5 | 与 Polymarket 最近 |
-
-> **推荐首选**: DigitalOcean New York — $6/月，延迟低，对中国大陆 / VPN 用户访问更稳定，支持 User Data 全自动部署。
+> **首选推荐**: Railway — 无需管理服务器，直接从 GitHub 部署，对 VPN 用户最友好。
 >
-> Vultr 部分地区在 VPN 环境下控制台响应不稳定；如遇此问题请改用 DigitalOcean。
+> 如果 Vultr / DigitalOcean 控制台在 VPN 下无法响应，请使用 Railway。
 
-### ⚡ DigitalOcean 部署（推荐，约 3 分钟完成）| DigitalOcean Quick Deploy
+---
+
+### 🚀 Railway 部署（最推荐，约 5 分钟完成）| Railway Quick Deploy
+
+> 📖 完整教程见 **[docs/railway-deploy.md](docs/railway-deploy.md)**
+
+**无需 SSH，无需管理服务器，全程点鼠标：**
+
+**① 注册 Railway**
+
+前往 <https://railway.com> -> **"Login with GitHub"**（GitHub 授权即登录，无需额外注册）。
+
+**② Fork 本仓库**
+
+打开 <https://github.com/zh6025/polymarket-trading-bot> -> 右上角 **Fork** -> 选择你自己的账号。
+
+**③ 创建项目 & 连接仓库**
+
+Railway 控制台 -> **"New Project"** -> **"Deploy from GitHub repo"** -> 选择你 Fork 的仓库。
+
+**④ 添加环境变量**
+
+进入服务 -> **"Variables"** -> **"RAW Editor"**，粘贴以下内容（先以模拟模式测试）：
+
+```
+TRADING_MODE=dry_run
+PK=
+POLYMARKET_FUNDER_ADDRESS=0xe95ce742AfC2977965998810f326192D1593c1E1
+POLYMARKET_API_KEY=
+POLYMARKET_API_SECRET=
+POLYMARKET_API_PASSPHRASE=
+CHAIN_ID=137
+WEB3_POLYGON_RPC=https://polygon-rpc.com
+MAX_TRADE_USDC=1.0
+DAILY_MAX_LOSS_USDC=10.0
+DIVERGENCE_THRESHOLD=0.10
+USE_RELATIVE_DIVERGENCE=false
+TREND_THRESHOLD_PCT=0.001
+OPPORTUNITY_PRICE_MAX=0.20
+TAKE_PROFIT_PRICE=0.40
+FLATTEN_BEFORE_SETTLEMENT=true
+DAILY_RESET_TZ_OFFSET_HOURS=8
+LOOP_INTERVAL_SECS=1.0
+LOG_LEVEL=INFO
+DB_PATH=/data/trading_bot.db
+```
+
+**⑤ 添加持久化存储卷**
+
+项目页面 -> **"Add Service"** -> **"Volume"** -> Mount Path 填写 `/data` -> 确认。
+
+**⑥ 部署 & 查看日志**
+
+Railway 自动构建并部署。进入 **"Logs"** 标签查看运行状态：
+
+```json
+{"event": "[DRY RUN] Watching orderbook..."}
+```
+
+看到 `[DRY RUN]` 说明机器人已在**模拟模式**正常运行。
+
+**⑦ 切换实盘**
+
+在 **"Variables"** 中填入真实密钥（`PK`、`POLYMARKET_API_KEY` 等），将 `TRADING_MODE` 改为 `live`，Railway 自动重新部署。
+
+---
+
+### DigitalOcean 部署（VPS 备选方案）| DigitalOcean Quick Deploy
 
 > 📖 完整图文教程见 **[docs/digitalocean-deploy.md](docs/digitalocean-deploy.md)**
+>
+> ⚠️ 若 DigitalOcean 控制台在 VPN 下无响应，请改用上方的 Railway 方案。
 
 **三步完成部署，无需任何命令行操作：**
 
@@ -175,8 +237,8 @@ journalctl -u polymarket-bot -f        # 查看实时日志
 ### Vultr 部署（备选方案）| Vultr Quick Deploy
 
 > 📖 完整图文教程见 **[docs/vultr-deploy.md](docs/vultr-deploy.md)**
-
-> ⚠️ 若在 VPN 环境下 Vultr 控制台点击无响应，请改用上方的 DigitalOcean 方案。
+>
+> ⚠️ 若在 VPN 环境下 Vultr 控制台点击无响应，请改用上方的 Railway 或 DigitalOcean 方案。
 
 **三步完成部署，无需任何命令行操作：**
 
