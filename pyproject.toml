@@ -1,0 +1,8 @@
+[tool]
+name = "polymarket-btc-trading-bot"
+version = "0.1.0"
+
+[project]
+description = "A Polymarket BTC trading bot using Binance WebSocket for price feed"
+authors = ["zh6025 <you@example.com>"]
+license = "MIT"
