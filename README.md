@@ -119,6 +119,8 @@ The bot:
 > **首选推荐**: Railway — 无需管理服务器，直接从 GitHub 部署，对 VPN 用户最友好。
 >
 > 如果 Vultr / DigitalOcean 控制台在 VPN 下无法响应，请使用 Railway。
+>
+> 📖 Railway 与 Vultr 的详细区别（VPN、SSH、费用、CI/CD、运维等逐项对比）见 **[docs/railway-vs-vultr.md](docs/railway-vs-vultr.md)**
 
 ---
 

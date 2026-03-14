@@ -386,3 +386,5 @@ systemctl restart sshd
 ---
 
 > 部署遇到问题？查看 [README 主文档](../README.md) 或提交 [Issue](https://github.com/zh6025/polymarket-trading-bot/issues)。
+>
+> 想了解 Railway 和 Vultr 的详细区别？查看 **[Railway vs Vultr 部署方式对比](railway-vs-vultr.md)**。
