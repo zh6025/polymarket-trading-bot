@@ -1,0 +1,21 @@
+version: "3.9"
+
+services:
+  trading-bot:
+    build: .
+    container_name: polymarket-trading-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - bot-data:/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    # Healthcheck is defined in Dockerfile
+
+volumes:
+  bot-data:
+    driver: local
