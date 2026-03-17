@@ -1,0 +1,31 @@
+﻿version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: polymarket-bot
+    environment:
+      - API_KEY=${API_KEY}
+      - SERIES_SLUG=btc-up-or-down-5m
+      - DRY_RUN=false
+      - POLLING_INTERVAL=5000
+    volumes:
+      - ./bot_data.db:/app/bot_data.db
+      - ./logs:/app/logs
+    restart: always
+    networks:
+      - bot-network
+
+  # 可选：监控面板
+  adminer:
+    image: adminer
+    ports:
+      - "8080:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=db
+    networks:
+      - bot-network
+
+networks:
+  bot-network:
+    driver: bridge
