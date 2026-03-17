@@ -1,4 +1,4 @@
-﻿FROM python:3.10-slim
+FROM python:3.10-slim
 
 WORKDIR /app
 
@@ -9,4 +9,4 @@ COPY . .
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "bot_live.py"]
+CMD ["python", "bot_continuous.py"]

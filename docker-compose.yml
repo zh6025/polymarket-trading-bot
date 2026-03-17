@@ -1,30 +1,67 @@
-﻿version: '3.8'
+version: '3.8'
 
 services:
+  # ============ 主交易机器人（实盘）============
   bot:
     build: .
     container_name: polymarket-bot
+    env_file:
+      - .env
     environment:
-      - API_KEY=${API_KEY}
       - SERIES_SLUG=btc-up-or-down-5m
-      - DRY_RUN=false
-      - POLLING_INTERVAL=5000
+      - DRY_RUN=${DRY_RUN:-true}
+      - POLLING_INTERVAL=${POLLING_INTERVAL:-5000}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
       - ./bot_data.db:/app/bot_data.db
       - ./logs:/app/logs
-    restart: always
+    restart: unless-stopped
     networks:
       - bot-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
 
-  # 可选：监控面板
-  adminer:
-    image: adminer
-    ports:
-      - "8080:8080"
+  # ============ 模拟模式（独立服务）============
+  bot-simulate:
+    build: .
+    container_name: polymarket-bot-simulate
+    env_file:
+      - .env
     environment:
-      - ADMINER_DEFAULT_SERVER=db
+      - DRY_RUN=true
+      - POLLING_INTERVAL=5000
+      - LOG_LEVEL=info
+    volumes:
+      - ./simulate_data.db:/app/bot_data.db
+      - ./logs/simulate:/app/logs
+    command: ["python", "bot_simulate.py"]
     networks:
       - bot-network
+    profiles:
+      - simulate
+
+  # ============ Web 监控面板（可选）============
+  dashboard:
+    build: .
+    container_name: polymarket-dashboard
+    env_file:
+      - .env
+    environment:
+      - DRY_RUN=true
+    ports:
+      - "8501:8501"
+    command: ["python", "web_dashboard.py"]
+    volumes:
+      - ./bot_data.db:/app/bot_data.db
+      - ./logs:/app/logs
+    networks:
+      - bot-network
+    profiles:
+      - dashboard
+    restart: unless-stopped
 
 networks:
   bot-network:
