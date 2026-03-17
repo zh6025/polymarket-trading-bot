@@ -9,15 +9,16 @@ Linode (Ubuntu 22.04 LTS) server using Docker Compose.
 
 1. [Prerequisites](#1-prerequisites)
 2. [Create a Linode Instance](#2-create-a-linode-instance)
-3. [Initialize the Server](#3-initialize-the-server)
-4. [Configure the Environment](#4-configure-the-environment)
-5. [Deploy the Bot](#5-deploy-the-bot)
-6. [Enable Systemd Auto-start](#6-enable-systemd-auto-start)
-7. [Monitoring and Logs](#7-monitoring-and-logs)
-8. [Backup and Restore](#8-backup-and-restore)
-9. [Updating the Bot](#9-updating-the-bot)
-10. [Troubleshooting](#10-troubleshooting)
-11. [Security Checklist](#11-security-checklist)
+3. [Find Your Linode IP Address](#3-find-your-linode-ip-address)
+4. [Initialize the Server](#4-initialize-the-server)
+5. [Configure the Environment](#5-configure-the-environment)
+6. [Deploy the Bot](#6-deploy-the-bot)
+7. [Enable Systemd Auto-start](#7-enable-systemd-auto-start)
+8. [Monitoring and Logs](#8-monitoring-and-logs)
+9. [Backup and Restore](#9-backup-and-restore)
+10. [Updating the Bot](#10-updating-the-bot)
+11. [Troubleshooting](#11-troubleshooting)
+12. [Security Checklist](#12-security-checklist)
 
 ---
 
@@ -48,7 +49,107 @@ Linode (Ubuntu 22.04 LTS) server using Docker Compose.
 
 ---
 
-## 3. Initialize the Server
+## 3. Find Your Linode IP Address
+
+You need the server's public IPv4 address to SSH in and to configure any
+external monitoring tools.  There are three ways to obtain it.
+
+### Method 1 — Linode Cloud Manager (web UI)
+
+1. Open [https://cloud.linode.com](https://cloud.linode.com) and log in.
+2. Click **Linodes** in the left sidebar.
+3. Find your instance in the list.  The **IP Address** column shows the public
+   IPv4 address directly on the list page.
+
+   ```
+   Linodes
+   ┌────────────────────┬───────────────┬──────────────┐
+   │ Label              │ Status        │ IP Address   │
+   ├────────────────────┼───────────────┼──────────────┤
+   │ polymarket-bot     │ ● Running     │ 45.79.XX.XX  │
+   └────────────────────┴───────────────┴──────────────┘
+   ```
+
+4. Click the instance name to open its **Summary** page.  Under the
+   **IP Addresses** section you will see:
+   - **IPv4** — public address (e.g. `45.79.XX.XX`)
+   - **IPv6** — public IPv6 address (optional)
+   - **Private IP** — internal Linode network address (not routable from the
+     internet)
+
+### Method 2 — Linode CLI
+
+If you have the [Linode CLI](https://www.linode.com/docs/products/tools/cli/)
+installed on your local machine:
+
+```bash
+# Install (if not already installed)
+pip install linode-cli
+
+# Log in with your Linode personal access token
+linode-cli configure
+
+# List all Linodes and their IPs
+linode-cli linodes list
+```
+
+Example output:
+
+```
+┌──────────┬─────────────────┬────────────┬──────────────┐
+│ id       │ label           │ status     │ ipv4         │
+├──────────┼─────────────────┼────────────┼──────────────┤
+│ 12345678 │ polymarket-bot  │ running    │ 45.79.XX.XX  │
+└──────────┴─────────────────┴────────────┴──────────────┘
+```
+
+To show a specific Linode's full network details:
+
+```bash
+linode-cli linodes view 12345678
+```
+
+### Method 3 — From Inside the Server
+
+Once you have connected to your Linode (even via the **Lish console** in the
+Cloud Manager), run any of these commands to confirm the public IP:
+
+```bash
+# Show all network interfaces and their addresses
+ip addr show eth0
+
+# Query a public metadata endpoint (returns only the IP as plain text)
+curl -s https://api.ipify.org
+
+# Alternative metadata endpoints
+curl -s https://ifconfig.me
+curl -s https://icanhazip.com
+```
+
+> **Linode Metadata Service** — Linode also provides an internal metadata API.
+> From within a running Linode you can retrieve instance information
+> (including IP) via:
+>
+> ```bash
+> curl -s http://169.254.169.254/v1/instance
+> ```
+
+### Using the IP Address
+
+Once you have the IP, substitute it wherever `<your-linode-ip>` appears in
+this guide.  Example:
+
+```bash
+# SSH into the server
+ssh root@45.79.XX.XX
+
+# Or, if using a non-root user after setup-linode.sh
+ssh ubuntu@45.79.XX.XX
+```
+
+---
+
+## 4. Initialize the Server
 
 Connect to the server and run the one-time setup script.
 
@@ -80,7 +181,7 @@ The `setup-linode.sh` script will:
 
 ---
 
-## 4. Configure the Environment
+## 5. Configure the Environment
 
 ```bash
 # Copy the production template to the project root
@@ -114,7 +215,7 @@ MAX_POSITION_SIZE=500
 
 ---
 
-## 5. Deploy the Bot
+## 6. Deploy the Bot
 
 ```bash
 cd /opt/polymarket-trading-bot
@@ -144,7 +245,7 @@ docker logs -f polymarket-bot
 
 ---
 
-## 6. Enable Systemd Auto-start
+## 7. Enable Systemd Auto-start
 
 The bot will automatically restart after a server reboot.
 
@@ -175,7 +276,7 @@ Useful systemd commands:
 
 ---
 
-## 7. Monitoring and Logs
+## 8. Monitoring and Logs
 
 ### Real-time container logs
 
@@ -221,7 +322,7 @@ Make sure `mailutils` is installed (`apt install mailutils`) and configured.
 
 ---
 
-## 8. Backup and Restore
+## 9. Backup and Restore
 
 ### Manual backup
 
@@ -263,7 +364,7 @@ sudo systemctl restart polymarket-bot
 
 ---
 
-## 9. Updating the Bot
+## 10. Updating the Bot
 
 ```bash
 cd /opt/polymarket-trading-bot
@@ -277,7 +378,7 @@ bash deploy/deploy.sh
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 ### Container exits immediately
 
@@ -339,7 +440,7 @@ sudo fail2ban-client set sshd unbanip <your-ip>
 
 ---
 
-## 11. Security Checklist
+## 12. Security Checklist
 
 - [ ] `.env` file has permissions `600` (`chmod 600 .env`)
 - [ ] SSH password authentication is disabled (key-only login)
