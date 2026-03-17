@@ -2,8 +2,13 @@
   "name": "poly-grid-bot",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "bot-runner.js",
   "scripts": {
+    "start": "node bot-runner.js",
+    "dry-run": "node bot-runner.js --dry-run",
+    "plan": "node scripts/plan-grid-dryrun.js",
+    "watch": "node scripts/watch-grid-dryrun.js",
+    "find-market": "node scripts/find-live-btc-5m.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
