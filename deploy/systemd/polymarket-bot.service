@@ -1,0 +1,53 @@
+[Unit]
+Description=Polymarket Trading Bot (Docker Compose)
+Documentation=https://github.com/zh6025/polymarket-trading-bot
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+
+WorkingDirectory=/opt/polymarket-trading-bot
+
+# Start: bring the production stack up
+ExecStart=/usr/bin/docker compose \
+    -f deploy/docker-compose.prod.yml \
+    --env-file .env \
+    up --remove-orphans
+
+# Stop: bring the stack down cleanly
+ExecStop=/usr/bin/docker compose \
+    -f deploy/docker-compose.prod.yml \
+    --env-file .env \
+    down
+
+# Reload: pull latest images and restart without full stop
+ExecReload=/usr/bin/docker compose \
+    -f deploy/docker-compose.prod.yml \
+    --env-file .env \
+    up -d --build
+
+# Restart policy
+Restart=on-failure
+RestartSec=30s
+StartLimitInterval=300s
+StartLimitBurst=5
+
+# Give containers time to start up
+TimeoutStartSec=120s
+TimeoutStopSec=60s
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=polymarket-bot
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
