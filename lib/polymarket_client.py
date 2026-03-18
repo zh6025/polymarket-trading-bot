@@ -1,4 +1,6 @@
-﻿from lib.utils import APIClient, log_info, log_error, log_warn
+﻿import requests
+import time
+from lib.utils import APIClient, log_info, log_error, log_warn
 from typing import Dict, List, Optional, Any
 
 class PolymarketClient:
@@ -42,6 +44,36 @@ class PolymarketClient:
             log_error(f"Failed to fetch orderbook: {e}")
             raise
     
+    def get_btc_5m_market_by_slug(self, slug: str) -> Optional[Dict]:
+        """通过 Gamma API 获取 BTC 5分钟市场"""
+        try:
+            url = f"https://gamma-api.polymarket.com/events/slug/{slug}"
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                if data and isinstance(data, dict):
+                    return data
+            return None
+        except Exception as e:
+            log_error(f"Failed to fetch market by slug: {e}")
+            return None
+
+    def get_current_btc_5m_market(self) -> Optional[Dict]:
+        """获取当前时间窗口的 BTC 5分钟市场，失败则尝试下一个或上一个窗口"""
+        now = int(time.time())
+        for offset in [0, 300, -300]:
+            nearest_5min = (now + offset) - ((now + offset) % 300)
+            slug = f"btc-updown-5m-{nearest_5min}"
+            log_info(f"尝试市场 slug: {slug}")
+            event = self.get_btc_5m_market_by_slug(slug)
+            if event:
+                markets = event.get('markets', [])
+                active = [m for m in markets if m.get('acceptingOrders', False) and not m.get('closed', True)]
+                if active:
+                    log_info(f"找到活跃市场: {event.get('title', slug)}")
+                    return event
+        return None
+
     def calculate_mid_price(self, book: Dict[str, Any]) -> Dict[str, float]:
         """Calculate bid/ask/mid from orderbook"""
         try:
