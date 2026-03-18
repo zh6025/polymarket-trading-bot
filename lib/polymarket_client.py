@@ -83,8 +83,9 @@ class PolymarketClient:
             if not bids or not asks:
                 return {'bid': 0.5, 'ask': 0.5, 'mid': 0.5}
             
-            bid_price = float(bids[0].get('price', 0.5))
-            ask_price = float(asks[0].get('price', 0.5))
+            # bids 升序排列(最高买单在末尾), asks 降序排列(最低卖单在末尾)
+            bid_price = float(bids[-1].get('price', 0.5))
+            ask_price = float(asks[-1].get('price', 0.5))
             mid_price = (bid_price + ask_price) / 2
             
             return {
