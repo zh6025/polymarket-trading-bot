@@ -1,6 +1,7 @@
 ﻿import asyncio
 import logging
 from datetime import datetime, timedelta
+from typing import Dict, List
 from lib.polymarket_client import PolymarketClient
 from lib.trading_engine import TradingEngine
 from lib.data_persistence import DataPersistence
@@ -32,30 +33,36 @@ class ContinuousGridTrader:
         self.winning_trades = 0
         self.losing_trades = 0
     
-    def find_tradable_markets(self, markets):
-        """找到可交易的市场（放宽条件以便测试）"""
+    def find_tradable_markets(self) -> List[Dict]:
+        """通过 Gamma API 动态查找当前 BTC 5分钟可交易市场"""
+        event = self.client.get_current_btc_5m_market()
+        if not event:
+            return []
+
         tradable = []
-        
-        for market in markets:
-            question = market.get('question', '').upper()
-            
-            # 条件 1: 有 tokens 数据
-            tokens = market.get('tokens', [])
-            if not tokens or len(tokens) < 2:
+        for m in event.get('markets', []):
+            if not m.get('acceptingOrders', False):
                 continue
-            
-            # 条件 2: 包含 BTC/Bitcoin
-            if not ('BTC' in question or 'BITCOIN' in question):
+            if m.get('closed', True):
                 continue
-            
-            # 条件 3: 包含 UP/DOWN 或类似的对比性词汇
-            if not ('UP' in question or 'DOWN' in question or 'RISE' in question or 
-                    'FALL' in question or 'ABOVE' in question or 'BELOW' in question or
-                    '上升' in question or '下降' in question or '高于' in question or '低于' in question):
+
+            clob_token_ids = m.get('clobTokenIds', [])
+            if not clob_token_ids or len(clob_token_ids) < 2:
                 continue
-            
-            tradable.append(market)
-        
+
+            tradable.append({
+                'question': m.get('question', event.get('title', '')),
+                'condition_id': m.get('conditionId', ''),
+                'accepting_orders': True,
+                'tokens': [
+                    {'token_id': clob_token_ids[0], 'outcome': 'UP'},
+                    {'token_id': clob_token_ids[1], 'outcome': 'DOWN'},
+                ],
+                'min_order_size': float(m.get('orderMinSize', 5)),
+                'tick_size': float(m.get('orderPriceMinTickSize', 0.01)),
+            })
+
+        log_info(f"找到 {len(tradable)} 个 BTC 5分钟可交易市场")
         return tradable
     
     def filter_by_status(self, markets, status='any'):
@@ -261,11 +268,8 @@ class ContinuousGridTrader:
         print("="*80)
         
         try:
-            # 获取市场列表
-            markets = self.client.get_markets()
-            
             # 找到可交易的市场
-            tradable = self.find_tradable_markets(markets)
+            tradable = self.find_tradable_markets()
             log_info(f"找到 {len(tradable)} 个 BTC 可交易市场")
             
             if not tradable:
