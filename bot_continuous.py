@@ -46,7 +46,9 @@ class ContinuousGridTrader:
             if m.get('closed', True):
                 continue
 
-            clob_token_ids = m.get('clobTokenIds', [])
+            import json as _json
+            _raw = m.get('clobTokenIds', [])
+            clob_token_ids = _json.loads(_raw) if isinstance(_raw, str) else _raw
             if not clob_token_ids or len(clob_token_ids) < 2:
                 continue
 
