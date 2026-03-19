@@ -1,3 +1,4 @@
+import os
 import asyncio
 import logging
 from datetime import datetime
@@ -135,7 +136,7 @@ class ContinuousGridTrader:
         down_mid = prices['down_mid']
 
         # 价格极端判断（市场快结算）
-        if up_mid < 0.02 or up_mid > 0.98:
+        if up_mid < 0.005 or up_mid > 0.995:
             signal['reason'] = f"UP价格极端({up_mid:.3f})，市场可能快结算，不交易"
             return signal
 
@@ -161,7 +162,7 @@ class ContinuousGridTrader:
     # ─────────────────────────────────────────
     def execute_trades(self, market: Dict, prices: Dict, signal: Dict):
         """在bid/ask挂单做市"""
-        order_size = market['min_size']
+        order_size = float(os.getenv("ORDER_SIZE", market["min_size"]))
         tick = market['tick_size']
         trades = []
 
