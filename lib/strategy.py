@@ -1,6 +1,9 @@
 from typing import List, Dict, Any, Tuple
 from lib.utils import round_to_tick, log_info
 
+# 新的方向性策略（推荐）/ New directional strategy (recommended)
+from lib.directional_strategy import DirectionalStrategy  # noqa: F401
+
 class GridStrategy:
     """Grid Trading Strategy"""
     
