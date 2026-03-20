@@ -1,33 +1,50 @@
 ﻿import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Dict, List, Optional
 from lib.polymarket_client import PolymarketClient
 from lib.trading_engine import TradingEngine
 from lib.data_persistence import DataPersistence
+from lib.directional_strategy import DirectionalStrategy
 from lib.utils import log_info, log_error, log_warn
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] %(message)s")
 
 class ContinuousGridTrader:
-    """连续 5 分钟周期网格交易机器人"""
-    
-    def __init__(self, dry_run=True):
+    """
+    连续 5 分钟周期方向性投注机器人。
+    Continuous directional betting bot for 5-minute BTC Up/Down binary markets.
+
+    策略核心 / Strategy core:
+    - 使用 Binance BTC/USDT 实时 K 线（EMA + ATR）生成方向信号
+    - 每个市场只投一边（UP 或 DOWN），绝不同时做双边
+    - 只在市场开放早期（前 120 秒）入场
+    - 只在赔率有利（ask < max_entry_price）时下注
+    """
+
+    def __init__(self, dry_run=True, config_dict: Optional[Dict] = None):
         self.client = PolymarketClient()
         self.engine = TradingEngine(dry_run=dry_run)
         self.db = DataPersistence()
         self.dry_run = dry_run
-        
-        # 交易周期配置
-        self.cycle_duration = 300  # 5 分钟 = 300 秒
-        self.check_interval = 5    # 每 5 秒检查一次市场
-        
-        # 市场跟踪
+
+        cfg = config_dict or {}
+
+        # 使用方向性策略替代网格策略 / Use directional strategy instead of grid
+        self.strategy = DirectionalStrategy(cfg)
+
+        # 缩短周期以便尽早捕捉新市场 / Shorter cycle to catch new markets early
+        self.cycle_duration = 30   # 30 秒检查一次 / Check every 30 seconds
+        self.check_interval = 5    # 每 5 秒检查一次市场 / Market check interval
+
+        # 每个市场只下注一次（记录已投注的市场）/ Track markets already bet on
+        self.bet_markets: set = set()
+
+        # 市场跟踪 / Market tracking
         self.market_history = []
         self.current_market = None
-        self.market_prices = {}
-        
-        # 统计数据
+
+        # 统计数据 / Statistics
         self.total_cycles = 0
         self.daily_pnl = 0
         self.winning_trades = 0
@@ -89,274 +106,231 @@ class ContinuousGridTrader:
             return markets
     
     async def analyze_market(self, market):
-        """分析市场数据并生成交易信号"""
+        """
+        分析市场数据并生成方向性交易信号。
+        Analyze market data and generate a directional betting signal using BTC price.
+        """
         try:
             tokens = market.get('tokens', [])
             if not tokens or len(tokens) < 2:
                 return None
-            
+
+            # 找到 UP 和 DOWN token / Find UP and DOWN tokens
+            up_token = next((t for t in tokens if t.get('outcome', '').upper() == 'UP'), None)
+            down_token = next((t for t in tokens if t.get('outcome', '').upper() == 'DOWN'), None)
+
+            if not up_token or not down_token:
+                log_warn("⚠️  未找到 UP/DOWN token，跳过此市场")
+                return None
+
+            # 获取当前订单簿价格 / Get current orderbook prices
             results = {}
-            
-            for token in tokens:
+            for token in [up_token, down_token]:
                 token_id = token.get('token_id')
-                outcome = token.get('outcome', 'Unknown')
-                
+                outcome = token.get('outcome', 'Unknown').upper()
                 try:
                     orderbook = self.client.get_orderbook(token_id)
                     prices = self.client.calculate_mid_price(orderbook)
-                    
-                    # 保存价格
-                    if token_id not in self.market_prices:
-                        self.market_prices[token_id] = []
-                    
-                    self.market_prices[token_id].append({
-                        'price': prices['mid'],
-                        'bid': prices['bid'],
-                        'ask': prices['ask'],
-                        'timestamp': datetime.now()
-                    })
-                    
-                    # 只保留最近 20 个数据点
-                    if len(self.market_prices[token_id]) > 20:
-                        self.market_prices[token_id].pop(0)
-                    
-                    # 计算指标
-                    volatility = self._calculate_volatility(token_id)
-                    trend = self._calculate_trend(token_id)
-                    
                     results[outcome] = {
                         'token_id': token_id,
                         'price': prices['mid'],
                         'bid': prices['bid'],
                         'ask': prices['ask'],
-                        'volatility': volatility,
-                        'trend': trend,
-                        'signal': self._generate_signal(prices['mid'], volatility, trend)
                     }
-                    
                 except Exception as e:
-                    log_warn(f"分析 {outcome} token 失败: {e}")
-                    # 继续下一个 token，不中断整个分析
-            
-            return results if results else None
-        
+                    log_warn(f"⚠️  获取 {outcome} 订单簿失败: {e}")
+
+            if 'UP' not in results or 'DOWN' not in results:
+                log_warn("⚠️  无法获取完整的 UP/DOWN 价格，跳过")
+                return None
+
+            # 用 BTC 实际价格生成方向信号 / Generate signal from real BTC price
+            signal = self.strategy.generate_signal()
+
+            up_ask = results['UP']['ask']
+            down_ask = results['DOWN']['ask']
+            up_token_id = results['UP']['token_id']
+            down_token_id = results['DOWN']['token_id']
+
+            # 决定是否下注 / Decide whether to bet
+            bet = self.strategy.decide_bet(
+                signal,
+                up_token_ask=up_ask,
+                down_token_ask=down_ask,
+                up_token_id=up_token_id,
+                down_token_id=down_token_id,
+            )
+
+            return {
+                'signal': signal,
+                'bet': bet,
+                'up': results['UP'],
+                'down': results['DOWN'],
+            }
+
         except Exception as e:
-            log_error(f"市场分析错误: {e}")
+            log_error(f"❌ 市场分析错误: {e}")
             return None
     
-    def _calculate_volatility(self, token_id):
-        """计算波动率"""
-        if token_id not in self.market_prices or len(self.market_prices[token_id]) < 2:
-            return 0
-        
-        prices = [p['price'] for p in self.market_prices[token_id]]
-        avg_price = sum(prices) / len(prices)
-        variance = sum((p - avg_price) ** 2 for p in prices) / len(prices)
-        volatility = variance ** 0.5
-        return volatility / avg_price if avg_price > 0 else 0
-    
-    def _calculate_trend(self, token_id):
-        """计算价格趋势"""
-        if token_id not in self.market_prices or len(self.market_prices[token_id]) < 5:
-            return 0
-        
-        prices = self.market_prices[token_id]
-        trend = (prices[-1]['price'] - prices[0]['price']) / prices[0]['price']
-        return trend
-    
-    def _generate_signal(self, price, volatility, trend):
-        """生成交易信号"""
-        # 信号等级: STRONG_BUY=2, BUY=1, HOLD=0, SELL=-1, STRONG_SELL=-2
-        
-        if volatility < 0.0001:
-            return 0  # 波动率太低，不交易
-        
-        if trend > 0.02 and volatility > 0.001:
-            return 2  # 强买信号
-        elif trend > 0.01 and volatility > 0.0005:
-            return 1  # 买信号
-        elif trend < -0.02 and volatility > 0.001:
-            return -2  # 强卖信号
-        elif trend < -0.01 and volatility > 0.0005:
-            return -1  # 卖信号
-        
-        return 0  # 持有
-    
-    async def execute_grid_trades(self, market, analysis):
-        """执行网格交易"""
+    async def execute_directional_bet(self, market, analysis) -> List[Dict]:
+        """
+        执行方向性单边下注（替代原网格交易）。
+        Execute a single directional bet on one outcome (UP or DOWN).
+        Never bets on both sides simultaneously.
+        """
         try:
             if not analysis:
-                return None
-            
-            market_question = market.get('question', 'Unknown')
-            trades_executed = []
-            
-            for outcome, data in analysis.items():
-                token_id = data['token_id']
-                signal = data['signal']
-                price = data['price']
-                
-                # 根据信号决定是否交易
-                if signal > 0:  # 买信号
-                    grid_levels = abs(signal)
-                    grid_step = 0.01
-                    order_size = 1.0
-                    
-                    for i in range(grid_levels):
-                        buy_price = price - (i * grid_step)
-                        if buy_price > 0.01:
-                            order_id = self.engine.place_order(
-                                token_id, 'buy', buy_price, order_size
-                            )
-                            
-                            # 保存到数据库
-                            self.db.save_trade({
-                                'order_id': order_id,
-                                'token_id': token_id,
-                                'side': 'buy',
-                                'price': buy_price,
-                                'size': order_size,
-                                'timestamp': datetime.now().isoformat()
-                            })
-                            
-                            trades_executed.append({
-                                'outcome': outcome,
-                                'side': 'buy',
-                                'price': buy_price,
-                                'size': order_size
-                            })
-                
-                elif signal < 0:  # 卖信号
-                    grid_levels = abs(signal)
-                    grid_step = 0.01
-                    order_size = 1.0
-                    
-                    for i in range(grid_levels):
-                        sell_price = price + (i * grid_step)
-                        if sell_price < 0.99:
-                            order_id = self.engine.place_order(
-                                token_id, 'sell', sell_price, order_size
-                            )
-                            
-                            self.db.save_trade({
-                                'order_id': order_id,
-                                'token_id': token_id,
-                                'side': 'sell',
-                                'price': sell_price,
-                                'size': order_size,
-                                'timestamp': datetime.now().isoformat()
-                            })
-                            
-                            trades_executed.append({
-                                'outcome': outcome,
-                                'side': 'sell',
-                                'price': sell_price,
-                                'size': order_size
-                            })
-            
-            return trades_executed
-        
+                return []
+
+            bet = analysis.get('bet')
+            if not bet:
+                log_info("⏭️  无下注决策，跳过此市场")
+                return []
+
+            condition_id = market.get('condition_id', 'unknown')
+            token_id = bet['token_id']
+            side = bet['side'].lower()
+            price = bet['price']
+            size = bet['size']
+            outcome = bet['outcome']
+
+            log_info(
+                f"🎯 执行下注: {outcome} {side.upper()} "
+                f"@ {price:.4f} × {size} USDC"
+            )
+
+            order_id = self.engine.place_order(token_id, side, price, size)
+
+            # 持久化交易记录 / Persist trade record
+            self.db.save_trade({
+                'order_id': order_id,
+                'token_id': token_id,
+                'side': side,
+                'price': price,
+                'size': size,
+                'timestamp': datetime.now().isoformat(),
+            })
+
+            # 标记该市场已下注 / Mark market as bet on
+            self.bet_markets.add(condition_id)
+
+            return [{
+                'outcome': outcome,
+                'side': side,
+                'price': price,
+                'size': size,
+                'order_id': order_id,
+            }]
+
         except Exception as e:
-            log_error(f"执行交易失败: {e}")
+            log_error(f"❌ 执行下注失败: {e}")
             return []
+
+    # 保持旧方法名以向后兼容 / Keep old name for backward compatibility
+    async def execute_grid_trades(self, market, analysis):
+        return await self.execute_directional_bet(market, analysis)
     
     async def run_cycle(self):
-        """运行一个 5 分钟交易周期"""
+        """
+        运行一个交易检查周期（约 30 秒）。
+        Run one trading check cycle (~30 seconds).
+        """
         self.total_cycles += 1
         cycle_start = datetime.now()
-        
+
         print("\n" + "="*80)
         print(f"🔄 交易周期 #{self.total_cycles} - {cycle_start.strftime('%Y-%m-%d %H:%M:%S')}")
         print("="*80)
-        
+
         try:
-            # 找到可交易的市场
+            # 找到可交易的市场 / Find tradable markets
             tradable = self.find_tradable_markets()
             log_info(f"找到 {len(tradable)} 个 BTC 可交易市场")
-            
+
             if not tradable:
-                log_warn("未找到任何 BTC 可交易市场")
+                log_warn("⚠️  未找到任何 BTC 可交易市场")
                 return
-            
+
             # 优先尝试活跃且接受订单的市场
             active_only = self.filter_by_status(tradable, 'active_only')
             if active_only:
                 markets_to_trade = active_only
                 print(f"✅ 找到 {len(active_only)} 个活跃市场（正在接受订单）")
             else:
-                # 次选：只要接受订单的
                 accepting = self.filter_by_status(tradable, 'accepting')
                 if accepting:
                     markets_to_trade = accepting
                     print(f"⚠️  找到 {len(accepting)} 个接受订单的市场")
                 else:
-                    # 最后选择：所有 BTC 市场（演示模式）
                     markets_to_trade = self.filter_by_status(tradable, 'any')[:5]
                     print(f"📌 演示模式：显示前 {len(markets_to_trade)} 个 BTC 市场")
-            
-            # 遍历所有活跃市场
+
             trades_total = 0
             for idx, market in enumerate(markets_to_trade, 1):
                 market_question = market.get('question', 'Unknown')[:70]
-                market_slug = market.get('market_slug', 'N/A')
-                
+                condition_id = market.get('condition_id', '')
+
                 print(f"\n📊 市场 {idx}/{len(markets_to_trade)}: {market_question}")
-                print(f"   Slug: {market_slug}")
-                print(f"   状态: 活跃={market.get('active')}, 已关闭={market.get('closed')}, 接受订单={market.get('accepting_orders')}")
-                
-                # 分析市场
+
+                # 跳过已下注的市场 / Skip markets already bet on
+                if condition_id and condition_id in self.bet_markets:
+                    print(f"   ⏭️  此市场已下注，跳过")
+                    continue
+
+                # 检查市场是否在入场时间窗口内 / Check market entry window
+                created_at = market.get('created_at')
+                if not self.strategy.should_enter_market(created_at):
+                    print(f"   ⏳ 市场已过入场窗口，跳过")
+                    continue
+
+                # 分析市场并生成信号 / Analyze market and generate signal
                 analysis = await self.analyze_market(market)
-                
+
                 if analysis:
-                    print("\n   📈 市场分析结果:")
-                    for outcome, data in analysis.items():
-                        signal_text = {
-                            2: "🟢🟢 强买",
-                            1: "🟢 买",
-                            0: "⚪ 持有",
-                            -1: "🔴 卖",
-                            -2: "🔴🔴 强卖"
-                        }.get(data['signal'], "❓ 未知")
-                        
-                        print(f"     {outcome}:")
-                        print(f"       💰 价格: {data['price']:.4f}")
-                        print(f"       📊 BID/ASK: {data['bid']:.4f} / {data['ask']:.4f}")
-                        print(f"       📈 波动率: {data['volatility']:.6f}")
-                        print(f"       📉 趋势: {data['trend']:+.6f}")
-                        print(f"       🎯 信号: {signal_text}")
-                    
-                    # 执行交易
-                    trades = await self.execute_grid_trades(market, analysis)
-                    
+                    signal = analysis.get('signal', 'SKIP')
+                    up_data = analysis.get('up', {})
+                    down_data = analysis.get('down', {})
+
+                    signal_emoji = {"UP": "🟢", "DOWN": "🔴", "SKIP": "⚪"}.get(signal, "❓")
+                    print(f"\n   📈 BTC 信号: {signal_emoji} {signal}")
+                    print(f"   💰 UP  token — BID={up_data.get('bid', 0):.4f}  ASK={up_data.get('ask', 0):.4f}")
+                    print(f"   💰 DOWN token — BID={down_data.get('bid', 0):.4f}  ASK={down_data.get('ask', 0):.4f}")
+
+                    # 执行方向性下注 / Execute directional bet
+                    trades = await self.execute_directional_bet(market, analysis)
+
                     if trades:
-                        print(f"\n   ✅ 执行了 {len(trades)} 笔交易")
+                        print(f"\n   ✅ 执行了 {len(trades)} 笔下注")
                         trades_total += len(trades)
-                        for trade in trades[:3]:  # 只显示前 3 笔
-                            print(f"     • {trade['outcome']} {trade['side'].upper()} @ {trade['price']:.4f}")
-                        if len(trades) > 3:
-                            print(f"     ... 还有 {len(trades) - 3} 笔交易")
+                        for trade in trades:
+                            print(
+                                f"     • {trade['outcome']} {trade['side'].upper()} "
+                                f"@ {trade['price']:.4f} × {trade['size']} USDC"
+                            )
+                    else:
+                        print("   ⚪ 无下注（信号不足或赔率不佳）")
                 else:
                     print("   ⚠️  无法分析此市场")
-            
-            # 显示周期统计
+
+            # 显示周期统计 / Show cycle statistics
             stats = self.engine.get_statistics()
             print(f"\n📊 周期统计:")
-            print(f"   本周期交易: {trades_total}")
+            print(f"   本周期下注: {trades_total}")
             print(f"   总订单: {stats['total_orders']}")
             print(f"   成交: {stats['filled_orders']}")
             print(f"   未实现PnL: {stats['unrealized_pnl']:.4f}")
-            
+
         except Exception as e:
-            log_error(f"周期执行失败: {e}")
+            log_error(f"❌ 周期执行失败: {e}")
             import traceback
             traceback.print_exc()
     
     async def continuous_trading_loop(self):
-        """连续交易主循环"""
+        """连续交易主循环 / Main continuous trading loop"""
         print("""
 ╔══════════════════════════════════════════════════════════════════════╗
-║           Polymarket - 连续 5 分钟网格交易机器人                     ║
-║                   🎯 目标: 持续自动盈利                              ║
+║        Polymarket - 连续方向性投注机器人（EMA + ATR 策略）           ║
+║                   🎯 目标: 基于 BTC 趋势单边下注                     ║
 ╚══════════════════════════════════════════════════════════════════════╝
         """)
         
@@ -419,16 +393,16 @@ class ContinuousGridTrader:
 
 
 async def main():
-    """主入口"""
+    """主入口 / Main entry point"""
     import os
     from lib.config import Config
-    
+
     config = Config()
-    
-    # 创建交易机器人
-    bot = ContinuousGridTrader(dry_run=config.dry_run)
-    
-    # 运行连续交易
+
+    # 创建方向性投注机器人 / Create directional betting bot
+    bot = ContinuousGridTrader(dry_run=config.dry_run, config_dict=config.to_dict())
+
+    # 运行连续交易 / Run continuous trading loop
     await bot.continuous_trading_loop()
 
 
