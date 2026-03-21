@@ -1,6 +1,7 @@
 ﻿import asyncio
+import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List
 from lib.polymarket_client import PolymarketClient
 from lib.trading_engine import TradingEngine
@@ -12,11 +13,12 @@ logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] %(
 class ContinuousGridTrader:
     """连续 5 分钟周期网格交易机器人"""
     
-    def __init__(self, dry_run=True):
+    def __init__(self, dry_run=True, strategy='grid', strategy_config=None):
         self.client = PolymarketClient()
         self.engine = TradingEngine(dry_run=dry_run)
         self.db = DataPersistence()
         self.dry_run = dry_run
+        self.strategy_name = strategy
         
         # 交易周期配置
         self.cycle_duration = 300  # 5 分钟 = 300 秒
@@ -32,6 +34,14 @@ class ContinuousGridTrader:
         self.daily_pnl = 0
         self.winning_trades = 0
         self.losing_trades = 0
+
+        # 动量对冲策略 / Momentum hedge strategy
+        if strategy == 'momentum_hedge':
+            from lib.momentum_hedge_strategy import MomentumHedgeStrategy
+            cfg = strategy_config or {}
+            self.momentum_strategy = MomentumHedgeStrategy(cfg)
+        else:
+            self.momentum_strategy = None
     
     def find_tradable_markets(self) -> List[Dict]:
         """通过 Gamma API 动态查找当前 BTC 5分钟可交易市场"""
@@ -353,6 +363,195 @@ class ContinuousGridTrader:
     
     async def continuous_trading_loop(self):
         """连续交易主循环"""
+        if self.strategy_name == 'momentum_hedge':
+            await self._momentum_hedge_loop()
+        else:
+            await self._grid_trading_loop()
+
+    async def _momentum_hedge_loop(self):
+        """
+        动量对冲策略主循环
+        Momentum hedge strategy main loop — checks every 10 seconds.
+        """
+        print("""
+╔══════════════════════════════════════════════════════════════════════╗
+║       Polymarket - 动量对冲策略机器人 (Momentum Hedge Bot)           ║
+║          🎯 70/30 触发 + Kelly 最优对冲 | Kelly-Optimal Hedge         ║
+╚══════════════════════════════════════════════════════════════════════╝
+        """)
+
+        if self.dry_run:
+            print("⚠️  运行模式: 干运行（模拟交易）| DRY RUN (simulated trades)")
+        else:
+            print("🔴 运行模式: 真实交易（注意风险！）| LIVE TRADING (real funds!)")
+
+        cfg = self.momentum_strategy.config
+        print(f"📊 触发阈值 Threshold : {cfg.get('trigger_threshold', 0.70):.0%}")
+        print(f"💰 总投注额 Bet size  : {cfg.get('total_bet_size', 4.0)} USDC")
+        print(f"⏱  最少剩余 Min secs  : {cfg.get('min_remaining_seconds', 60):.0f}s")
+        print(f"🔝 最高价格 Max price : {cfg.get('max_trigger_price', 0.85):.0%}")
+        print(f"🧮 动态对冲 Dynamic r : {cfg.get('use_dynamic_ratio', True)}\n")
+
+        # Track last day reset
+        last_reset_day = datetime.now(timezone.utc).date()
+
+        while True:
+            try:
+                # Daily state reset 每日重置
+                today = datetime.now(timezone.utc).date()
+                if today != last_reset_day:
+                    self.momentum_strategy.reset_for_new_day()
+                    last_reset_day = today
+
+                await self._run_momentum_hedge_check()
+
+                # 每 10 秒检查一次 / Check every 10 seconds
+                await asyncio.sleep(10)
+
+            except KeyboardInterrupt:
+                self.shutdown()
+                break
+            except Exception as e:
+                log_error(f"动量对冲主循环错误 | Momentum hedge loop error: {e}")
+                await asyncio.sleep(10)
+
+    async def _run_momentum_hedge_check(self):
+        """
+        单次动量对冲检查
+        Run a single momentum-hedge market check cycle.
+        """
+        # 获取当前活跃市场 / Get current active market
+        event = self.client.get_current_btc_5m_market()
+        if not event:
+            log_warn("⚠️  未找到活跃的BTC 5分钟市场 | No active BTC 5m market found")
+            return
+
+        markets = event.get('markets', [])
+        active = [
+            m for m in markets
+            if m.get('acceptingOrders', False) and not m.get('closed', True)
+        ]
+        if not active:
+            log_warn("⚠️  当前无接受订单的市场 | No market currently accepting orders")
+            return
+
+        market = active[0]
+
+        # 提取 token IDs / Extract token IDs
+        _raw = market.get('clobTokenIds', [])
+        try:
+            clob_token_ids = json.loads(_raw) if isinstance(_raw, str) else _raw
+        except (json.JSONDecodeError, TypeError) as exc:
+            log_error(f"无法解析市场 token IDs | Failed to parse clobTokenIds: {exc!r}")
+            return
+        if not clob_token_ids or len(clob_token_ids) < 2:
+            log_warn("⚠️  市场 token IDs 不完整 | Incomplete market token IDs")
+            return
+
+        up_token_id = clob_token_ids[0]
+        down_token_id = clob_token_ids[1]
+        market_id = market.get('conditionId', '')
+
+        # 计算剩余时间 / Calculate remaining market time
+        end_date_str = market.get('endDateIso') or event.get('endDate', '')
+        remaining_seconds = self._calc_remaining_seconds(end_date_str)
+
+        # 获取订单簿 / Get orderbooks
+        try:
+            up_book = self.client.get_orderbook(up_token_id)
+            down_book = self.client.get_orderbook(down_token_id)
+        except Exception as e:
+            log_error(f"获取订单簿失败 | Failed to fetch orderbooks: {e}")
+            return
+
+        up_prices = self.client.calculate_mid_price(up_book)
+        down_prices = self.client.calculate_mid_price(down_book)
+
+        up_ask = up_prices['ask']
+        down_ask = down_prices['ask']
+
+        log_info(
+            f"📊 UP ask: {up_ask:.4f}  DOWN ask: {down_ask:.4f}  "
+            f"剩余 remaining: {remaining_seconds:.0f}s  市场 market: {market_id[:8]}…"
+        )
+
+        # 生成订单 / Generate orders
+        orders = self.momentum_strategy.generate_orders(
+            up_ask, down_ask,
+            up_token_id, down_token_id,
+            market_id,
+            remaining_seconds,
+        )
+
+        if not orders:
+            return
+
+        # 执行订单 / Execute orders
+        for order in orders:
+            token_id = order['token_id']
+            price = order['price']
+            size = order['size']
+            role = order.get('role', 'main')
+            outcome = order['outcome']
+
+            order_id = self.engine.place_order(token_id, 'buy', price, size)
+
+            self.db.save_trade({
+                'order_id': order_id,
+                'token_id': token_id,
+                'side': 'buy',
+                'price': price,
+                'size': size,
+                'timestamp': datetime.now().isoformat(),
+                'strategy': 'momentum_hedge',
+                'role': role,
+                'market_id': market_id,
+                'outcome': outcome,
+            })
+
+            usdc_spent = size * price
+            log_info(
+                f"{'✅' if role == 'main' else '🛡️'} 下注 {role.upper()} [{outcome}]: "
+                f"{size:.4f} shares @ {price:.4f} (≈{usdc_spent:.2f} USDC)"
+                f" | {'main bet' if role == 'main' else 'hedge bet'}"
+            )
+
+        # 记录预期盈亏 / Log expected P&L
+        trigger = self.momentum_strategy.check_trigger(up_ask, down_ask)
+        if trigger:
+            total_bet = float(self.momentum_strategy.config.get('total_bet_size', 4.0))
+            hedge_ratio = orders[0].get('hedge_ratio', 0.33)
+            pnl = self.momentum_strategy.get_expected_pnl(
+                trigger['favorite_price'], hedge_ratio, total_bet
+            )
+            log_info(
+                f"📈 预期盈亏 Expected P&L:\n"
+                f"   胜 Win  : +{pnl['win_profit']:.4f} USDC\n"
+                f"   负 Lose :  {pnl['lose_loss']:.4f} USDC\n"
+                f"   期望值 EV:  {pnl['expected_value']:.4f} USDC\n"
+                f"   Kelly增长率 growth: {pnl['kelly_growth_rate']:.6f}"
+            )
+
+    def _calc_remaining_seconds(self, end_date_str: str) -> float:
+        """
+        计算市场剩余秒数
+        Calculate remaining seconds until market ends from an ISO date string.
+        Returns a large value if the end time cannot be parsed.
+        """
+        if not end_date_str:
+            return 999.0
+        try:
+            end_dt = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            remaining = (end_dt - now).total_seconds()
+            return max(remaining, 0.0)
+        except Exception:
+            return 999.0
+
+    async def _grid_trading_loop(self):
+        """原网格交易主循环 / Original grid trading main loop"""
         print("""
 ╔══════════════════════════════════════════════════════════════════════╗
 ║           Polymarket - 连续 5 分钟网格交易机器人                     ║
@@ -424,9 +623,24 @@ async def main():
     from lib.config import Config
     
     config = Config()
-    
+
+    # 构建策略配置 / Build strategy config
+    strategy_config = {
+        'trigger_threshold': config.trigger_threshold,
+        'total_bet_size': config.total_bet_size,
+        'min_remaining_seconds': config.min_remaining_seconds,
+        'max_trigger_price': config.max_trigger_price,
+        'use_dynamic_ratio': config.use_dynamic_ratio,
+        'fixed_hedge_ratio': config.fixed_hedge_ratio,
+        'win_rate_slope': config.win_rate_slope,
+    }
+
     # 创建交易机器人
-    bot = ContinuousGridTrader(dry_run=config.dry_run)
+    bot = ContinuousGridTrader(
+        dry_run=config.dry_run,
+        strategy=config.strategy,
+        strategy_config=strategy_config,
+    )
     
     # 运行连续交易
     await bot.continuous_trading_loop()

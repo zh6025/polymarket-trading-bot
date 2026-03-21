@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Tuple
 from lib.utils import round_to_tick, log_info
+from lib.momentum_hedge_strategy import MomentumHedgeStrategy
 
 class GridStrategy:
     """Grid Trading Strategy"""
