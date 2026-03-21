@@ -1,4 +1,4 @@
-﻿import sqlite3
+import sqlite3
 import json
 import logging
 from datetime import datetime, timedelta
@@ -28,10 +28,22 @@ class DataPersistence:
                 price REAL,
                 size REAL,
                 timestamp TEXT,
+                outcome TEXT,
+                market_slug TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
+        # Migrate existing tables: add new columns if they don't exist yet.
+        # The column names and types are hardcoded here (not user-supplied),
+        # so they are safe to interpolate directly into the ALTER TABLE statement.
+        _allowed_migrations = [('outcome', 'TEXT'), ('market_slug', 'TEXT')]
+        for col, col_type in _allowed_migrations:
+            try:
+                cursor.execute(f"ALTER TABLE trades ADD COLUMN {col} {col_type}")
+            except Exception:
+                pass  # Column already exists
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS prices (
                 id INTEGER PRIMARY KEY,
@@ -64,15 +76,17 @@ class DataPersistence:
         try:
             cursor = self.conn.cursor()
             cursor.execute("""
-                INSERT INTO trades (order_id, token_id, side, price, size, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO trades (order_id, token_id, side, price, size, timestamp, outcome, market_slug)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade.get('order_id'),
                 trade.get('token_id'),
                 trade.get('side'),
                 trade.get('price'),
                 trade.get('size'),
-                trade.get('timestamp')
+                trade.get('timestamp'),
+                trade.get('outcome'),
+                trade.get('market_slug'),
             ))
             self.conn.commit()
             return True
@@ -109,7 +123,29 @@ class DataPersistence:
         except Exception as e:
             logger.error(f"Failed to get trades: {e}")
             return []
-    
+
+    def get_performance_summary(self, hours: int = 24) -> Dict[str, Any]:
+        """Return a simple performance summary over recent trades.
+
+        Note: the values represent notional amounts (price × size) rather than
+        realised PnL, which would require position resolution data.
+        """
+        try:
+            trades = self.get_trades(hours=hours)
+            if not trades:
+                return {'avg_pnl': 0.0, 'max_pnl': 0.0, 'min_pnl': 0.0, 'total_trades': 0}
+
+            notional_values = [t.get('price', 0.0) * t.get('size', 0.0) for t in trades]
+            return {
+                'avg_pnl': sum(notional_values) / len(notional_values),
+                'max_pnl': max(notional_values),
+                'min_pnl': min(notional_values),
+                'total_trades': len(trades),
+            }
+        except Exception as e:
+            logger.error(f"Failed to compute performance summary: {e}")
+            return {'avg_pnl': 0.0, 'max_pnl': 0.0, 'min_pnl': 0.0, 'total_trades': 0}
+
     def close(self):
         """Close database connection"""
         if self.conn:
