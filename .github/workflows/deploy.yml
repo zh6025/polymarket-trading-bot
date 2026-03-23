@@ -4,10 +4,9 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:   # 支持手动触发
+  workflow_dispatch:
 
 jobs:
-  # ============ 第一步：构建测试 ============
   test:
     name: 🧪 Build & Test (Dry-Run)
     runs-on: ubuntu-latest
@@ -30,17 +29,47 @@ jobs:
 
       - name: ✅ Run bot dry-run test
         env:
-          API_KEY: demo-key
           DRY_RUN: "true"
-          SERIES_SLUG: btc-up-or-down-5m
-          LEVELS_EACH_SIDE: "3"
-          GRID_STEP: "0.02"
-          ORDER_SIZE: "1"
-          TRADE_BOTH_OUTCOMES: "true"
-          DAILY_LOSS_LIMIT: "100"
-          MAX_POSITION_SIZE: "500"
-          POLLING_INTERVAL: "60000"
-          LOG_LEVEL: info
+          TRADING_ENABLED: "false"
+
+          POLYMARKET_HOST: "https://clob.polymarket.com"
+          GAMMA_HOST: "https://gamma-api.polymarket.com"
+          CHAIN_ID: "137"
+
+          MIN_ORDER_SIZE: "5"
+          MAX_POSITION_SIZE: "50"
+
+          MAX_DAILY_LOSS: "30"
+          MAX_TRADES_PER_DAY: "20"
+          COOLDOWN_SECONDS: "30"
+
+          HARD_STOP_NEW_ENTRY_SEC: "30"
+          MIN_SECS_MAIN_ENTRY: "90"
+          MIN_SECS_HEDGE_ENTRY: "60"
+
+          MIN_MAIN_PRICE: "0.20"
+          MAX_MAIN_PRICE: "0.66"
+          MIN_HEDGE_PRICE: "0.03"
+          MAX_HEDGE_PRICE: "0.25"
+
+          MAX_MAIN_SPREAD: "0.03"
+          MAX_HEDGE_SPREAD: "0.02"
+
+          MIN_MAIN_DEPTH_USDC: "10"
+          MIN_HEDGE_DEPTH_USDC: "5"
+
+          MIN_WIN_PROB: "0.55"
+          MAX_HEDGE_RATIO: "0.33"
+          MIN_MEANINGFUL_HEDGE_RATIO: "0.05"
+
+          ONE_POSITION_PER_MARKET: "true"
+          CONSECUTIVE_LOSS_LIMIT: "3"
+          DAILY_LOSS_LIMIT_USDC: "20"
+          DAILY_TRADE_LIMIT: "20"
+
+          STATE_FILE_PATH: "bot_state.json"
+          DB_PATH: "bot_data.db"
+          LOG_LEVEL: "INFO"
         run: |
           echo "Running bot_runner.py in dry-run mode..."
           timeout 30 python bot_runner.py || true
@@ -51,11 +80,10 @@ jobs:
           docker build -t polymarket-bot:test .
           echo "✅ Docker image built successfully"
 
-  # ============ 第二步：SSH 部署到 AWS 东京 ============
   deploy:
     name: 🌏 Deploy to AWS Tokyo (ap-northeast-1)
     runs-on: ubuntu-latest
-    needs: test          # 必须测试通过才部署
+    needs: test
     if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
