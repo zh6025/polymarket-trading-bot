@@ -1,23 +1,35 @@
 ﻿import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Dict, List, Optional
 from lib.polymarket_client import PolymarketClient
 from lib.trading_engine import TradingEngine
 from lib.data_persistence import DataPersistence
 from lib.utils import log_info, log_error, log_warn
+from lib.decision import Decision, make_trade_decision, format_decision_log
+from lib.bot_state import BotState, MarketPosition
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] %(message)s")
 
 class ContinuousGridTrader:
     """连续 5 分钟周期网格交易机器人"""
     
-    def __init__(self, dry_run=True):
+    def __init__(self, dry_run=True, config=None):
         self.client = PolymarketClient()
         self.engine = TradingEngine(dry_run=dry_run)
         self.db = DataPersistence()
         self.dry_run = dry_run
-        
+        self.config = config
+
+        # Load or initialise bot state (crash recovery)
+        state_file = getattr(config, 'state_file', 'bot_state.json') if config else 'bot_state.json'
+        self.state = BotState.load(state_file)
+        self._state_file = state_file
+
+        # Sync trading_enabled from config (config takes precedence over stale state)
+        if config is not None:
+            self.state.trading_enabled = config.trading_enabled
+
         # 交易周期配置
         self.cycle_duration = 300  # 5 分钟 = 300 秒
         self.check_interval = 5    # 每 5 秒检查一次市场
@@ -29,7 +41,6 @@ class ContinuousGridTrader:
         
         # 统计数据
         self.total_cycles = 0
-        self.daily_pnl = 0
         self.winning_trades = 0
         self.losing_trades = 0
     
@@ -260,6 +271,179 @@ class ContinuousGridTrader:
             log_error(f"执行交易失败: {e}")
             return []
     
+    def _check_risk_limits(self) -> Optional[str]:
+        """
+        Check session-level risk limits before processing a market.
+
+        Returns a string describing which limit was hit, or None if all clear.
+        """
+        self.state.reset_daily_counters_if_new_day()
+        cfg = self.config
+
+        if cfg is None:
+            return None
+
+        if not self.state.trading_enabled and not self.dry_run:
+            return "trading_disabled"
+
+        if self.state.daily_pnl <= -cfg.daily_loss_limit_usdc:
+            return f"daily_loss_limit_hit (pnl={self.state.daily_pnl:.2f})"
+
+        if self.state.consecutive_losses >= cfg.consecutive_loss_limit:
+            return f"consecutive_loss_limit_hit ({self.state.consecutive_losses})"
+
+        if self.state.daily_trade_count >= cfg.daily_trade_limit:
+            return f"daily_trade_limit_hit ({self.state.daily_trade_count})"
+
+        return None
+
+    def _extract_remaining_sec(self, market: dict) -> float:
+        """
+        Estimate remaining seconds for the given market.
+
+        Falls back to a large value (600) when unavailable so downstream
+        time-filters still apply their own hard limits.
+        """
+        end_date_str = market.get('end_date_iso', '') or market.get('endDateIso', '')
+        if end_date_str:
+            try:
+                end_dt = datetime.fromisoformat(end_date_str.rstrip('Z'))
+                remaining = (end_dt - datetime.utcnow()).total_seconds()
+                return max(remaining, 0.0)
+            except Exception:
+                pass
+        return 600.0
+
+    async def _run_decision_for_market(
+        self,
+        market: dict,
+        analysis: dict,
+        market_id: str,
+        market_slug: str,
+    ) -> None:
+        """
+        Apply the production decision layer to a single market and (optionally)
+        place orders.  Always prints a structured decision log line.
+        """
+        cfg = self.config
+        if cfg is None:
+            return
+
+        # Determine which side is cheaper (main = lower ask, hedge = higher ask)
+        up_data = analysis.get('UP', {})
+        down_data = analysis.get('DOWN', {})
+
+        up_ask = up_data.get('ask', 1.0)
+        down_ask = down_data.get('ask', 1.0)
+
+        if up_ask <= down_ask:
+            main_side, hedge_side = 'UP', 'DOWN'
+            main_data, hedge_data = up_data, down_data
+        else:
+            main_side, hedge_side = 'DOWN', 'UP'
+            main_data, hedge_data = down_data, up_data
+
+        main_price = main_data.get('ask', 1.0)
+        hedge_price = hedge_data.get('ask', 1.0)
+
+        # Compute spread from bid/ask where available
+        def _spread(d: dict) -> Optional[float]:
+            bid = d.get('bid')
+            ask = d.get('ask')
+            if bid and ask and ask > 0:
+                return ask - bid
+            return None
+
+        remaining_sec = self._extract_remaining_sec(market)
+
+        # Estimate win_prob from market prices (rough: cheaper side wins more often)
+        win_prob = 1.0 - main_price  # simple complement; real value unknown
+
+        decision = make_trade_decision(
+            main_price=main_price,
+            hedge_price=hedge_price,
+            win_prob=win_prob,
+            remaining_sec=remaining_sec,
+            main_bet_size=cfg.main_bet_size_usdc,
+            hard_stop_new_entry_sec=cfg.hard_stop_new_entry_sec,
+            min_secs_main_entry=cfg.min_secs_main_entry,
+            min_secs_hedge_entry=cfg.min_secs_hedge_entry,
+            main_max_price=cfg.main_max_price,
+            main_min_price=cfg.main_min_price,
+            hedge_max_price=cfg.hedge_max_price,
+            hedge_min_price=cfg.hedge_min_price,
+            main_spread=_spread(main_data),
+            hedge_spread=_spread(hedge_data),
+            main_max_spread=cfg.main_max_spread,
+            hedge_max_spread=cfg.hedge_max_spread,
+            main_min_depth=cfg.main_min_depth,
+            hedge_min_depth=cfg.hedge_min_depth,
+            enable_hedge=cfg.enable_hedge,
+        )
+
+        log_line = format_decision_log(market_slug, main_side, hedge_side, decision)
+        print(f"   🎲 {log_line}")
+
+        if decision.decision == Decision.SKIP:
+            return
+
+        # Duplicate position guard
+        if cfg.one_position_per_market and self.state.has_open_position(market_id):
+            print(f"   ⛔ Skipping – position already open for {market_id}")
+            return
+
+        # In dry-run mode log the intent but don't place real orders
+        if self.dry_run:
+            print(
+                f"   📝 DRY-RUN – would {'ENTER_MAIN_AND_HEDGE' if decision.decision == Decision.ENTER_MAIN_AND_HEDGE else 'ENTER_MAIN_ONLY'}: "
+                f"main={main_side}@{main_price:.4f}×{decision.main_size:.2f} "
+                + (f"hedge={hedge_side}@{hedge_price:.4f}×{decision.hedge_size:.2f}" if decision.hedge_size > 0 else "no-hedge")
+            )
+            return
+
+        # Live trading path
+        if not self.state.trading_enabled:
+            print("   🔒 trading_enabled=false – skipping live order")
+            return
+
+        main_token = main_data.get('token_id')
+        hedge_token = hedge_data.get('token_id')
+
+        main_order_id = self.engine.place_order(main_token, 'buy', main_price, decision.main_size)
+        self.db.save_trade({
+            'order_id': main_order_id,
+            'token_id': main_token,
+            'side': 'buy',
+            'price': main_price,
+            'size': decision.main_size,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+        hedge_order_id = None
+        if decision.decision == Decision.ENTER_MAIN_AND_HEDGE and hedge_token:
+            hedge_order_id = self.engine.place_order(hedge_token, 'buy', hedge_price, decision.hedge_size)
+            self.db.save_trade({
+                'order_id': hedge_order_id,
+                'token_id': hedge_token,
+                'side': 'buy',
+                'price': hedge_price,
+                'size': decision.hedge_size,
+                'timestamp': datetime.now().isoformat(),
+            })
+
+        position = MarketPosition(
+            market_id=market_id,
+            main_side=main_side,
+            main_entry_price=main_price,
+            main_size=decision.main_size,
+            hedge_side=hedge_side if hedge_order_id else None,
+            hedge_entry_price=hedge_price if hedge_order_id else None,
+            hedge_size=decision.hedge_size if hedge_order_id else None,
+        )
+        self.state.record_trade_open(position)
+        self.state.save(self._state_file)
+        print(f"   ✅ Live orders placed and position recorded for {market_id}")
+
     async def run_cycle(self):
         """运行一个 5 分钟交易周期"""
         self.total_cycles += 1
@@ -268,6 +452,15 @@ class ContinuousGridTrader:
         print("\n" + "="*80)
         print(f"🔄 交易周期 #{self.total_cycles} - {cycle_start.strftime('%Y-%m-%d %H:%M:%S')}")
         print("="*80)
+
+        # Print bot state summary every cycle
+        print(f"📋 State: {self.state.summary()}")
+
+        # Check session-level risk limits
+        risk_block = self._check_risk_limits()
+        if risk_block:
+            print(f"🛑 Risk limit active: {risk_block} – skipping cycle")
+            return
         
         try:
             # 找到可交易的市场
@@ -298,7 +491,8 @@ class ContinuousGridTrader:
             trades_total = 0
             for idx, market in enumerate(markets_to_trade, 1):
                 market_question = market.get('question', 'Unknown')[:70]
-                market_slug = market.get('market_slug', 'N/A')
+                market_slug = market.get('market_slug', market.get('condition_id', 'N/A'))
+                market_id = market.get('condition_id', market_slug)
                 
                 print(f"\n📊 市场 {idx}/{len(markets_to_trade)}: {market_question}")
                 print(f"   Slug: {market_slug}")
@@ -324,12 +518,18 @@ class ContinuousGridTrader:
                         print(f"       📈 波动率: {data['volatility']:.6f}")
                         print(f"       📉 趋势: {data['trend']:+.6f}")
                         print(f"       🎯 信号: {signal_text}")
+
+                    # Production decision layer
+                    if self.config is not None:
+                        await self._run_decision_for_market(
+                            market, analysis, market_id, market_slug
+                        )
                     
-                    # 执行交易
+                    # Legacy grid trades (dry-run only – kept for observability)
                     trades = await self.execute_grid_trades(market, analysis)
                     
                     if trades:
-                        print(f"\n   ✅ 执行了 {len(trades)} 笔交易")
+                        print(f"\n   ✅ Grid模拟: {len(trades)} 笔")
                         trades_total += len(trades)
                         for trade in trades[:3]:  # 只显示前 3 笔
                             print(f"     • {trade['outcome']} {trade['side'].upper()} @ {trade['price']:.4f}")
@@ -400,6 +600,13 @@ class ContinuousGridTrader:
         
         stats = self.engine.get_statistics()
         performance = self.db.get_performance_summary(hours=24)
+
+        # Persist state before exit
+        try:
+            self.state.save(self._state_file)
+            print(f"💾 State saved to {self._state_file}")
+        except Exception as exc:
+            log_error(f"State save failed: {exc}")
         
         print(f"""
 📊 最终统计:
@@ -408,6 +615,7 @@ class ContinuousGridTrader:
    成交: {stats['filled_orders']}
    总交易: {stats['total_trades']}
    未实现PnL: {stats['unrealized_pnl']:.4f}
+   日内PnL: {self.state.daily_pnl:.4f}
    
 📈 性能指标 (24小时):
    平均PnL: {performance.get('avg_pnl', 0):.4f}
@@ -425,8 +633,8 @@ async def main():
     
     config = Config()
     
-    # 创建交易机器人
-    bot = ContinuousGridTrader(dry_run=config.dry_run)
+    # 创建交易机器人（传入 config 以激活 decision/state 层）
+    bot = ContinuousGridTrader(dry_run=config.dry_run, config=config)
     
     # 运行连续交易
     await bot.continuous_trading_loop()
