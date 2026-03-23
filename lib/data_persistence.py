@@ -1,117 +1,122 @@
-﻿import sqlite3
-import json
-import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
+import sqlite3
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Iterator, Optional
 
-logger = logging.getLogger(__name__)
+
+@dataclass
+class PositionRecord:
+    token_id: str
+    side: str
+    size: float
+    entry_price: float
+    created_at: str
+
 
 class DataPersistence:
-    """Handle data persistence with SQLite"""
-    
-    def __init__(self, db_path: str = "bot_data.db"):
+    def __init__(self, db_path: str):
         self.db_path = db_path
-        self.conn = None
-        self._initialize_db()
-    
-    def _initialize_db(self):
-        """Initialize database with required tables"""
-        self.conn = sqlite3.connect(self.db_path)
-        cursor = self.conn.cursor()
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS trades (
-                id INTEGER PRIMARY KEY,
-                order_id TEXT UNIQUE,
-                token_id TEXT,
-                side TEXT,
-                price REAL,
-                size REAL,
-                timestamp TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS prices (
-                id INTEGER PRIMARY KEY,
-                token_id TEXT,
-                price REAL,
-                bid REAL,
-                ask REAL,
-                timestamp TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS performance (
-                id INTEGER PRIMARY KEY,
-                timestamp TEXT,
-                total_pnl REAL,
-                unrealized_pnl REAL,
-                positions JSON,
-                statistics JSON,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        self.conn.commit()
-        logger.info("Database initialized")
-    
-    def save_trade(self, trade: Dict[str, Any]) -> bool:
-        """Save trade to database"""
+        self._initialize()
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        conn = sqlite3.connect(self.db_path)
         try:
-            cursor = self.conn.cursor()
-            cursor.execute("""
-                INSERT INTO trades (order_id, token_id, side, price, size, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                trade.get('order_id'),
-                trade.get('token_id'),
-                trade.get('side'),
-                trade.get('price'),
-                trade.get('size'),
-                trade.get('timestamp')
-            ))
-            self.conn.commit()
-            return True
-        except Exception as e:
-            logger.error(f"Failed to save trade: {e}")
-            return False
-    
-    def save_price(self, token_id: str, price: float, bid: float, ask: float, timestamp: str) -> bool:
-        """Save price snapshot"""
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute("""
-                INSERT INTO prices (token_id, price, bid, ask, timestamp)
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _initialize(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS positions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token_id TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    size REAL NOT NULL,
+                    entry_price REAL NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token_id TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    size REAL NOT NULL,
+                    price REAL NOT NULL,
+                    realized_pnl REAL NOT NULL DEFAULT 0,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+
+    def add_position(self, token_id: str, side: str, size: float, entry_price: float) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO positions (token_id, side, size, entry_price, created_at)
                 VALUES (?, ?, ?, ?, ?)
-            """, (token_id, price, bid, ask, timestamp))
-            self.conn.commit()
-            return True
-        except Exception as e:
-            logger.error(f"Failed to save price: {e}")
-            return False
-    
-    def get_trades(self, hours: int = 24) -> List[Dict]:
-        """Get recent trades"""
-        try:
-            cursor = self.conn.cursor()
-            cutoff = datetime.now() - timedelta(hours=hours)
-            cursor.execute("""
-                SELECT * FROM trades WHERE created_at > ?
-                ORDER BY created_at DESC
-            """, (cutoff,))
-            
-            columns = [description[0] for description in cursor.description]
-            return [dict(zip(columns, row)) for row in cursor.fetchall()]
-        except Exception as e:
-            logger.error(f"Failed to get trades: {e}")
-            return []
-    
-    def close(self):
-        """Close database connection"""
-        if self.conn:
-            self.conn.close()
-            logger.info("Database connection closed")
+                """,
+                (token_id, side, size, entry_price, datetime.utcnow().isoformat()),
+            )
+
+    def get_open_position(self, token_id: str) -> Optional[PositionRecord]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT token_id, side, size, entry_price, created_at
+                FROM positions
+                WHERE token_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (token_id,),
+            ).fetchone()
+
+        if not row:
+            return None
+
+        return PositionRecord(
+            token_id=row[0],
+            side=row[1],
+            size=row[2],
+            entry_price=row[3],
+            created_at=row[4],
+        )
+
+    def close_positions(self, token_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM positions WHERE token_id = ?", (token_id,))
+
+    def record_trade(
+        self,
+        token_id: str,
+        side: str,
+        size: float,
+        price: float,
+        realized_pnl: float,
+        reason: str,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO trades (token_id, side, size, price, realized_pnl, reason, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    token_id,
+                    side,
+                    size,
+                    price,
+                    realized_pnl,
+                    reason,
+                    datetime.utcnow().isoformat(),
+                ),
+            )
