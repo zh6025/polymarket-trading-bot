@@ -1,86 +1,73 @@
-﻿import asyncio
-import json
-import logging
-from datetime import datetime
-from typing import Dict, List, Optional, Any
-from lib.utils import log_info, log_error, log_warn
+from dataclasses import dataclass
+from typing import Optional
 
-logger = logging.getLogger(__name__)
+
+@dataclass
+class BookLevel:
+    price: float
+    size: float
+
+
+@dataclass
+class OrderBookSnapshot:
+    best_bid: Optional[BookLevel]
+    best_ask: Optional[BookLevel]
+
+
+@dataclass
+class TradeSignal:
+    should_buy_yes: bool
+    should_buy_no: bool
+    target_price: float
+    order_size: float
+    reason: str
+
 
 class TradingEngine:
-    """Real-time trading execution engine with order management"""
-    
-    def __init__(self, dry_run: bool = True):
-        self.dry_run = dry_run
-        self.orders: Dict[str, Dict] = {}
-        self.positions: Dict[str, float] = {}
-        self.trades: List[Dict] = []
-        self.pnl: float = 0.0
-        self.order_counter = 0
-    
-    def place_order(self, token_id: str, side: str, price: float, size: float) -> str:
-        """Place buy/sell order"""
-        self.order_counter += 1
-        order_id = f"order_{self.order_counter}_{datetime.now().timestamp()}"
-        
-        order = {
-            'id': order_id,
-            'token_id': token_id,
-            'side': side,
-            'price': price,
-            'size': size,
-            'status': 'pending' if not self.dry_run else 'filled',
-            'timestamp': datetime.now().isoformat(),
-            'filled_size': 0,
-            'avg_price': 0
-        }
-        
-        self.orders[order_id] = order
-        
-        if self.dry_run:
-            self._fill_order(order_id)
-        
-        log_info(f"Order placed: {side.upper()} {size:.2f} @ {price:.4f}")
-        return order_id
-    
-    def _fill_order(self, order_id: str):
-        """Simulate order fill"""
-        order = self.orders.get(order_id)
-        if not order:
-            return
-        
-        order['status'] = 'filled'
-        order['filled_size'] = order['size']
-        order['avg_price'] = order['price']
-        
-        token_id = order['token_id']
-        current_pos = self.positions.get(token_id, 0)
-        
-        if order['side'] == 'buy':
-            self.positions[token_id] = current_pos + order['size']
-        else:
-            self.positions[token_id] = current_pos - order['size']
-        
-        self.trades.append({
-            'order_id': order_id,
-            'token_id': token_id,
-            'side': order['side'],
-            'price': order['price'],
-            'size': order['size'],
-            'timestamp': order['timestamp']
-        })
-        
-        log_info(f"Order filled: {order_id}")
-    
-    def get_statistics(self) -> Dict[str, Any]:
-        """Get trading statistics"""
-        filled_orders = [o for o in self.orders.values() if o['status'] == 'filled']
-        
-        return {
-            'total_orders': len(self.orders),
-            'filled_orders': len(filled_orders),
-            'total_trades': len(self.trades),
-            'positions': self.positions,
-            'unrealized_pnl': self.pnl,
-            'dry_run': self.dry_run
-        }
+    def __init__(
+        self,
+        min_order_size: float,
+        imbalance_threshold: float,
+        min_spread: float,
+    ):
+        self.min_order_size = min_order_size
+        self.imbalance_threshold = imbalance_threshold
+        self.min_spread = min_spread
+
+    def evaluate(self, yes_book: OrderBookSnapshot, no_book: OrderBookSnapshot) -> Optional[TradeSignal]:
+        if not yes_book.best_bid or not yes_book.best_ask or not no_book.best_bid or not no_book.best_ask:
+            return None
+
+        yes_spread = yes_book.best_ask.price - yes_book.best_bid.price
+        no_spread = no_book.best_ask.price - no_book.best_bid.price
+
+        if yes_spread < self.min_spread and no_spread < self.min_spread:
+            return None
+
+        yes_bid_size = yes_book.best_bid.size
+        yes_ask_size = yes_book.best_ask.size
+        no_bid_size = no_book.best_bid.size
+        no_ask_size = no_book.best_ask.size
+
+        yes_imbalance = (yes_bid_size / yes_ask_size) if yes_ask_size > 0 else 0.0
+        no_imbalance = (no_bid_size / no_ask_size) if no_ask_size > 0 else 0.0
+
+        if yes_imbalance >= self.imbalance_threshold:
+            return TradeSignal(
+                should_buy_yes=True,
+                should_buy_no=False,
+                target_price=yes_book.best_ask.price,
+                order_size=self.min_order_size,
+                reason="yes_bid_ask_imbalance",
+            )
+
+        if no_imbalance >= self.imbalance_threshold:
+            return TradeSignal(
+                should_buy_yes=False,
+                should_buy_no=True,
+                target_price=no_book.best_ask.price,
+                order_size=self.min_order_size,
+                reason="no_bid_ask_imbalance",
+            )
+
+        return None

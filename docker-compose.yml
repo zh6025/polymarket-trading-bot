@@ -1,18 +1,55 @@
-
 services:
-  # ============ 主交易机器人（实盘）============
   bot:
     build: .
     container_name: polymarket-bot
     env_file:
       - .env
     environment:
-      - SERIES_SLUG=btc-up-or-down-5m
-      - DRY_RUN=${DRY_RUN:-true}
-      - POLLING_INTERVAL=${POLLING_INTERVAL:-5000}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
+      DRY_RUN: ${DRY_RUN:-true}
+      TRADING_ENABLED: ${TRADING_ENABLED:-false}
+
+      POLYMARKET_HOST: ${POLYMARKET_HOST:-https://clob.polymarket.com}
+      GAMMA_HOST: ${GAMMA_HOST:-https://gamma-api.polymarket.com}
+      CHAIN_ID: ${CHAIN_ID:-137}
+
+      MIN_ORDER_SIZE: ${MIN_ORDER_SIZE:-5}
+      MAX_POSITION_SIZE: ${MAX_POSITION_SIZE:-50}
+
+      MAX_DAILY_LOSS: ${MAX_DAILY_LOSS:-30}
+      MAX_TRADES_PER_DAY: ${MAX_TRADES_PER_DAY:-20}
+      COOLDOWN_SECONDS: ${COOLDOWN_SECONDS:-30}
+
+      HARD_STOP_NEW_ENTRY_SEC: ${HARD_STOP_NEW_ENTRY_SEC:-30}
+      MIN_SECS_MAIN_ENTRY: ${MIN_SECS_MAIN_ENTRY:-90}
+      MIN_SECS_HEDGE_ENTRY: ${MIN_SECS_HEDGE_ENTRY:-60}
+
+      MIN_MAIN_PRICE: ${MIN_MAIN_PRICE:-0.20}
+      MAX_MAIN_PRICE: ${MAX_MAIN_PRICE:-0.66}
+      MIN_HEDGE_PRICE: ${MIN_HEDGE_PRICE:-0.03}
+      MAX_HEDGE_PRICE: ${MAX_HEDGE_PRICE:-0.25}
+
+      MAX_MAIN_SPREAD: ${MAX_MAIN_SPREAD:-0.03}
+      MAX_HEDGE_SPREAD: ${MAX_HEDGE_SPREAD:-0.02}
+
+      MIN_MAIN_DEPTH_USDC: ${MIN_MAIN_DEPTH_USDC:-10}
+      MIN_HEDGE_DEPTH_USDC: ${MIN_HEDGE_DEPTH_USDC:-5}
+
+      MIN_WIN_PROB: ${MIN_WIN_PROB:-0.55}
+      MAX_HEDGE_RATIO: ${MAX_HEDGE_RATIO:-0.33}
+      MIN_MEANINGFUL_HEDGE_RATIO: ${MIN_MEANINGFUL_HEDGE_RATIO:-0.05}
+
+      ONE_POSITION_PER_MARKET: ${ONE_POSITION_PER_MARKET:-true}
+      CONSECUTIVE_LOSS_LIMIT: ${CONSECUTIVE_LOSS_LIMIT:-3}
+      DAILY_LOSS_LIMIT_USDC: ${DAILY_LOSS_LIMIT_USDC:-20}
+      DAILY_TRADE_LIMIT: ${DAILY_TRADE_LIMIT:-20}
+
+      DB_PATH: ${DB_PATH:-bot_data.db}
+      STATE_FILE_PATH: ${STATE_FILE_PATH:-bot_state.json}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    command: ["python", "bot_runner.py"]
     volumes:
       - ./bot_data.db:/app/bot_data.db
+      - ./bot_state.json:/app/bot_state.json
       - ./logs:/app/logs
     restart: unless-stopped
     networks:
@@ -23,33 +60,35 @@ services:
         max-size: "10m"
         max-file: "5"
 
-  # ============ 模拟模式（独立服务）============
   bot-simulate:
     build: .
     container_name: polymarket-bot-simulate
     env_file:
       - .env
     environment:
-      - DRY_RUN=true
-      - POLLING_INTERVAL=5000
-      - LOG_LEVEL=info
+      DRY_RUN: "true"
+      TRADING_ENABLED: "false"
+      DB_PATH: simulate_data.db
+      STATE_FILE_PATH: simulate_state.json
+      LOG_LEVEL: INFO
     volumes:
-      - ./simulate_data.db:/app/bot_data.db
+      - ./simulate_data.db:/app/simulate_data.db
+      - ./simulate_state.json:/app/simulate_state.json
       - ./logs/simulate:/app/logs
-    command: ["python", "bot_simulate.py"]
+    command: ["python", "bot_runner.py"]
     networks:
       - bot-network
     profiles:
       - simulate
 
-  # ============ Web 监控面板（可选）============
   dashboard:
     build: .
     container_name: polymarket-dashboard
     env_file:
       - .env
     environment:
-      - DRY_RUN=true
+      DRY_RUN: "true"
+      TRADING_ENABLED: "false"
     ports:
       - "8501:8501"
     command: ["python", "web_dashboard.py"]
