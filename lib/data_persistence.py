@@ -28,6 +28,8 @@ class DataPersistence:
                 price REAL,
                 size REAL,
                 timestamp TEXT,
+                outcome TEXT,
+                market_slug TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -64,15 +66,17 @@ class DataPersistence:
         try:
             cursor = self.conn.cursor()
             cursor.execute("""
-                INSERT INTO trades (order_id, token_id, side, price, size, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO trades (order_id, token_id, side, price, size, timestamp, outcome, market_slug)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade.get('order_id'),
                 trade.get('token_id'),
                 trade.get('side'),
                 trade.get('price'),
                 trade.get('size'),
-                trade.get('timestamp')
+                trade.get('timestamp'),
+                trade.get('outcome'),
+                trade.get('market_slug'),
             ))
             self.conn.commit()
             return True
@@ -115,3 +119,36 @@ class DataPersistence:
         if self.conn:
             self.conn.close()
             logger.info("Database connection closed")
+
+    def get_performance_summary(self) -> Dict[str, Any]:
+        """Get overall performance statistics"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM trades")
+            total_trades = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM trades WHERE outcome = 'WIN'")
+            wins = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM trades WHERE outcome = 'LOSS'")
+            losses = cursor.fetchone()[0]
+
+            win_rate = wins / total_trades if total_trades > 0 else 0.0
+
+            cursor.execute("""
+                SELECT timestamp, total_pnl FROM performance
+                ORDER BY created_at DESC LIMIT 1
+            """)
+            latest = cursor.fetchone()
+            total_pnl = latest[1] if latest else 0.0
+
+            return {
+                'total_trades': total_trades,
+                'wins': wins,
+                'losses': losses,
+                'win_rate': round(win_rate, 4),
+                'total_pnl': total_pnl,
+            }
+        except Exception as e:
+            logger.error(f"Failed to get performance summary: {e}")
+            return {}
