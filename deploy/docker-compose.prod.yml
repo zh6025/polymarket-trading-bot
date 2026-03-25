@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  polymarket-bot:
+    build: ..
+    container_name: polymarket-bot
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    volumes:
+      - ../logs:/app/logs
+      - bot_state:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  bot_state:

@@ -1,0 +1,12 @@
+.git
+node_modules
+.env
+.env.*
+scripts/
+__pycache__/
+*.db
+bot_state.json
+tests/
+docs/
+deploy/
+*.md
