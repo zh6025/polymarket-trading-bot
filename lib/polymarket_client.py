@@ -1,15 +1,21 @@
-﻿import requests
+import requests
 import time
 from lib.utils import APIClient, log_info, log_error, log_warn
 from typing import Dict, List, Optional, Any
 
+
 class PolymarketClient:
     """Polymarket API Client for market data and orderbook"""
-    
-    BASE_URL = "https://clob.polymarket.com"
-    
-    def __init__(self):
-        self.client = APIClient(base_url="https://clob.polymarket.com")
+
+    DEFAULT_HOST = "https://clob.polymarket.com"
+
+    def __init__(self, host: str = None, chain_id: int = None,
+                 private_key: str = None, proxy_address: str = None):
+        self.BASE_URL = (host or self.DEFAULT_HOST).rstrip("/")
+        self.chain_id = chain_id
+        self.private_key = private_key
+        self.proxy_address = proxy_address
+        self.client = APIClient(base_url=self.BASE_URL)
     
     def get_markets(self) -> List[Dict[str, Any]]:
         """Fetch markets list from CLOB"""
