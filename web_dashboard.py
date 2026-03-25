@@ -1,4 +1,4 @@
-﻿from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string
 from lib.data_persistence import DataPersistence
 from lib.monitoring import MonitoringDashboard
 

@@ -15,7 +15,7 @@ class PositionRecord:
 
 
 class DataPersistence:
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str = "bot_data.db"):
         self.db_path = db_path
         self._initialize()
 
@@ -120,3 +120,42 @@ class DataPersistence:
                     datetime.utcnow().isoformat(),
                 ),
             )
+
+    def get_trades(self, hours: int = 24) -> list:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                SELECT token_id, side, size, price, realized_pnl, reason, created_at
+                FROM trades
+                WHERE created_at >= datetime('now', ? || ' hours')
+                ORDER BY created_at DESC
+                """,
+                (f"-{hours}",),
+            )
+            rows = cursor.fetchall()
+        return [
+            {
+                "token_id": r[0],
+                "side": r[1],
+                "size": r[2],
+                "price": r[3],
+                "realized_pnl": r[4],
+                "reason": r[5],
+                "timestamp": r[6],
+            }
+            for r in rows
+        ]
+
+    def get_performance_summary(self, hours: int = 24) -> dict:
+        trades = self.get_trades(hours=hours)
+        if not trades:
+            return {"total_trades": 0, "total_pnl": 0.0, "avg_pnl": 0.0, "win_rate": 0.0}
+
+        total_pnl = sum(t["realized_pnl"] for t in trades)
+        wins = sum(1 for t in trades if t["realized_pnl"] > 0)
+        return {
+            "total_trades": len(trades),
+            "total_pnl": round(total_pnl, 4),
+            "avg_pnl": round(total_pnl / len(trades), 4),
+            "win_rate": round(wins / len(trades), 4),
+        }
