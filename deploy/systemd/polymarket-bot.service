@@ -1,0 +1,17 @@
+[Unit]
+Description=Polymarket Trading Bot
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/polymarket-bot
+ExecStart=/opt/polymarket-bot/.venv/bin/python bot_continuous.py
+Restart=always
+RestartSec=10
+EnvironmentFile=/opt/polymarket-bot/.env
+StandardOutput=append:/opt/polymarket-bot/logs/bot.log
+StandardError=append:/opt/polymarket-bot/logs/bot.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,313 +1,401 @@
-import os
+#!/usr/bin/env python3
+"""
+bot_continuous.py — Continuous trading loop with strategy dispatch.
+
+Supported strategies (STRATEGY env var):
+  imbalance       — Late-entry single-side imbalance (default)
+  directional     — EMA+ATR BTC trend following
+  momentum_hedge  — 70% trigger + Kelly-optimal hedge
+
+Risk gates (BotState):
+  - Daily PnL loss limit
+  - Daily trade count limit
+  - Consecutive loss limit
+  - Hard stop N seconds before resolution
+
+Execution order when hedging:
+  1. Place HEDGE order first
+  2. Place MAIN order after hedge confirmed
+"""
 import asyncio
 import logging
-from datetime import datetime
-from typing import Dict, List, Optional
+from datetime import datetime, timezone
+
+from lib.config import Config
+from lib.utils import log_info, log_error, log_warn
 from lib.polymarket_client import PolymarketClient
 from lib.trading_engine import TradingEngine
 from lib.data_persistence import DataPersistence
-from lib.utils import log_info, log_error, log_warn
+from lib.bot_state import BotState, MarketPosition
+from lib.decision import (
+    make_trade_decision, format_decision_log,
+    SKIP, ENTER_MAIN_ONLY, ENTER_MAIN_AND_HEDGE,
+)
+from lib.direction_scorer import DirectionScorer
+from lib.btc_price_feed import get_btc_klines, extract_closes, extract_volumes
+from lib.directional_strategy import DirectionalStrategy
+from lib.momentum_hedge_strategy import MomentumHedgeStrategy
 
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] %(message)s")
-
-class MarketExpiredError(Exception):
-    """市场已结算，token失效"""
-    pass
-
-class ContinuousGridTrader:
-    """连续5分钟周期BTC网格交易机器人"""
-
-    def __init__(self, dry_run=True):
-        self.client = PolymarketClient()
-        self.engine = TradingEngine(dry_run=dry_run)
-        self.db = DataPersistence()
-        self.dry_run = dry_run
-
-        self.check_interval = 5     # 每5秒轮询一次orderbook
-        self.total_cycles = 0
-        self.market_prices = {}     # token_id -> [价格历史]
-
-    # ─────────────────────────────────────────
-    # 市场选择（以Polymarket时间为准）
-    # ─────────────────────────────────────────
-    def find_active_market(self) -> Optional[Dict]:
-        """获取当前活跃的BTC 5分钟市场（直接读Polymarket API）"""
-        import json as _json
-        event = self.client.get_current_btc_5m_market()
-        if not event:
-            return None
-
-        for m in event.get('markets', []):
-            if not m.get('acceptingOrders', False):
-                continue
-            if m.get('closed', False):
-                continue
-
-            raw = m.get('clobTokenIds', '[]')
-            token_ids = _json.loads(raw) if isinstance(raw, str) else raw
-            if len(token_ids) < 2:
-                continue
-
-            return {
-                'title':    event.get('title', ''),
-                'question': m.get('question', ''),
-                'up_token':   token_ids[0],
-                'down_token': token_ids[1],
-                'tick_size':  float(m.get('orderPriceMinTickSize', 0.01)),
-                'min_size':   float(m.get('orderMinSize', 5)),
-            }
-        return None
-
-    # ─────────────────────────────────────────
-    # 价格分析（做市商视角）
-    # ─────────────────────────────────────────
-    def get_prices(self, market: Dict) -> Optional[Dict]:
-        """获取UP/DOWN当前价格，验证互补性"""
-        try:
-            up_book   = self.client.get_orderbook(market['up_token'])
-            down_book = self.client.get_orderbook(market['down_token'])
-
-            up_p   = self.client.calculate_mid_price(up_book)
-            down_p = self.client.calculate_mid_price(down_book)
-
-            # mid为None说明orderbook单边或为空，跳过
-            if up_p['mid'] is None or down_p['mid'] is None:
-                log_warn("orderbook异常，跳过本轮")
-                return None
-
-            total = up_p['mid'] + down_p['mid']
-            log_info(f"UP={up_p['mid']:.4f} DOWN={down_p['mid']:.4f} 合计={total:.4f}")
-
-            # UP+DOWN应接近1（允许±0.05误差）
-            if not (0.95 <= total <= 1.05):
-                log_warn(f"价格互补性异常: UP+DOWN={total:.4f}，跳过")
-                return None
-
-            return {
-                'up_bid':   up_p['bid'],   'up_ask':   up_p['ask'],   'up_mid':   up_p['mid'],
-                'down_bid': down_p['bid'], 'down_ask': down_p['ask'], 'down_mid': down_p['mid'],
-                'spread_up':   up_p['ask']   - up_p['bid'],
-                'spread_down': down_p['ask'] - down_p['bid'],
-                'timestamp': datetime.now(),
-            }
-        except Exception as e:
-            log_error(f"获取价格失败: {e}")
-            if "404" in str(e) or "Not Found" in str(e):
-                raise MarketExpiredError(f"市场token已失效(404): {e}")
-            return None
-
-    def record_prices(self, token_id: str, mid: float):
-        """记录价格历史（最多保留30个点）"""
-        if token_id not in self.market_prices:
-            self.market_prices[token_id] = []
-        self.market_prices[token_id].append(mid)
-        if len(self.market_prices[token_id]) > 30:
-            self.market_prices[token_id].pop(0)
-
-    def get_volatility(self, token_id: str) -> float:
-        """计算价格波动率"""
-        prices = self.market_prices.get(token_id, [])
-        if len(prices) < 3:
-            return 0.0
-        avg = sum(prices) / len(prices)
-        variance = sum((p - avg) ** 2 for p in prices) / len(prices)
-        return (variance ** 0.5) / avg if avg > 0 else 0.0
-
-    # ─────────────────────────────────────────
-    # 信号生成（做市商策略）
-    # ─────────────────────────────────────────
-    def generate_signal(self, prices: Dict, market: Dict) -> Dict:
-        """
-        做市商策略：
-        - spread足够大（>1个tick）→ 在bid/ask之间挂单
-        - 价格接近0.5时最佳（不偏向任何方向）
-        - 价格极端（<0.05或>0.95）→ 市场快结算，不交易
-        """
-        tick = market['tick_size']
-        min_spread = tick * 1  # 最小有效价差（需要3个tick才有利润空间）
-
-        signal = {
-            'trade_up':   False,
-            'trade_down': False,
-            'reason':     '',
-        }
-
-        up_mid   = prices['up_mid']
-        down_mid = prices['down_mid']
-
-        # 价格极端判断（市场快结算）
-        if up_mid < 0.005 or up_mid > 0.995:
-            signal['reason'] = f"UP价格极端({up_mid:.3f})，市场可能快结算，不交易"
-            return signal
-
-        # 价差判断
-        if prices['spread_up'] >= min_spread:
-            signal['trade_up'] = True
-        if prices['spread_down'] >= min_spread:
-            signal['trade_down'] = True
-
-        if signal['trade_up'] or signal['trade_down']:
-            signal['reason'] = (
-                f"价差UP={prices['spread_up']:.4f} "
-                f"DOWN={prices['spread_down']:.4f} "
-                f"最小有效价差={min_spread:.4f}"
-            )
-        else:
-            signal['reason'] = f"价差过小，不交易"
-
-        return signal
-
-    # ─────────────────────────────────────────
-    # 执行交易（dry_run下模拟）
-    # ─────────────────────────────────────────
-    def execute_trades(self, market: Dict, prices: Dict, signal: Dict):
-        """在bid/ask挂单做市"""
-        order_size = float(os.getenv("ORDER_SIZE", market["min_size"]))
-        tick = market['tick_size']
-        trades = []
-
-        if signal['trade_up']:
-            spread = prices['spread_up']
-            if spread >= tick * 2:
-                # 价差够大：内缩1tick，赚更多
-                buy_price  = round(prices['up_bid'] + tick, 4)
-                sell_price = round(prices['up_ask'] - tick, 4)
-            else:
-                # 价差只有1tick：直接在bid买、ask卖，赚整个价差
-                buy_price  = round(prices['up_bid'], 4)
-                sell_price = round(prices['up_ask'], 4)
-
-            if buy_price < sell_price:
-                self.engine.place_order(market['up_token'], 'buy',  buy_price,  order_size)
-                self.engine.place_order(market['up_token'], 'sell', sell_price, order_size)
-                trades.append(f"UP  BUY@{buy_price:.4f} SELL@{sell_price:.4f} spread={spread:.4f}")
-
-        if signal['trade_down']:
-            spread = prices['spread_down']
-            if spread >= tick * 2:
-                buy_price  = round(prices['down_bid'] + tick, 4)
-                sell_price = round(prices['down_ask'] - tick, 4)
-            else:
-                buy_price  = round(prices['down_bid'], 4)
-                sell_price = round(prices['down_ask'], 4)
-
-            if buy_price < sell_price:
-                self.engine.place_order(market['down_token'], 'buy',  buy_price,  order_size)
-                self.engine.place_order(market['down_token'], 'sell', sell_price, order_size)
-                trades.append(f"DOWN BUY@{buy_price:.4f} SELL@{sell_price:.4f} spread={spread:.4f}")
-
-        return trades
-
-    # ─────────────────────────────────────────
-    # 主循环
-    # ─────────────────────────────────────────
-    async def run(self):
-        print("""
-╔══════════════════════════════════════════════════════╗
-║    Polymarket BTC 5分钟 做市商机器人                 ║
-╚══════════════════════════════════════════════════════╝""")
-        mode = "🟡 DRY RUN（模拟）" if self.dry_run else "🔴 真实交易"
-        print(f"模式: {mode}\n")
-
-        current_market = None
-        market_start   = None
-
-        while True:
-            try:
-                now = datetime.now()
-
-                # ── 每个5分钟窗口开始时刷新市场 ──
-                need_refresh = (
-                    current_market is None or
-                    market_start is None or
-                    (now - market_start).total_seconds() >= 290  # 提前10秒换市场
-                )
-
-                if need_refresh:
-                    print(f"\n{'='*60}")
-                    print(f"🔍 [{now.strftime('%H:%M:%S')}] 查找当前活跃市场...")
-                    new_market = self.find_active_market()
-                    if new_market:
-                        current_market = new_market
-                        # 用市场真实开始时间（从slug解析UTC时间戳）
-                        try:
-                            import re
-                            slug = new_market.get('slug', '') or new_market.get('title', '')
-                            # slug格式: btc-updown-5m-1773840300
-                            m = re.search(r'btc-updown-5m-(\d+)', slug)
-                            if m:
-                                real_start_ts = int(m.group(1))
-                                from datetime import timezone
-                                market_start = datetime.fromtimestamp(real_start_ts)
-                                log_info(f"市场真实开始时间: {market_start.strftime('%H:%M:%S')} (已过{(now-market_start).total_seconds():.0f}s)")
-                            else:
-                                market_start = now
-                        except Exception:
-                            market_start = now
-                        self.market_prices = {}  # 重置价格历史
-                        self.total_cycles += 1
-                        print(f"✅ 周期#{self.total_cycles}: {current_market['title']}")
-                    else:
-                        print("⚠️  未找到活跃市场，10秒后重试...")
-                        await asyncio.sleep(10)
-                        continue
-
-                # ── 获取价格 ──
-                try:
-                    prices = self.get_prices(current_market)
-                except MarketExpiredError as e:
-                    log_warn(f"⚠️  市场已结算，强制刷新市场: {e}")
-                    current_market = None  # 强制下次循环刷新市场
-                    market_start = None
-                    await asyncio.sleep(5)
-                    continue
-                if not prices:
-                    await asyncio.sleep(self.check_interval)
-                    continue
-
-                # 记录价格历史
-                self.record_prices(current_market['up_token'],   prices['up_mid'])
-                self.record_prices(current_market['down_token'], prices['down_mid'])
-
-                vol_up   = self.get_volatility(current_market['up_token'])
-                elapsed  = (now - market_start).total_seconds()
-
-                print(f"\n[{now.strftime('%H:%M:%S')}] +{elapsed:.0f}s "
-                      f"UP={prices['up_mid']:.4f}({prices['spread_up']:.4f}) "
-                      f"DOWN={prices['down_mid']:.4f}({prices['spread_down']:.4f}) "
-                      f"vol={vol_up:.6f}")
-
-                # ── 生成信号并执行 ──
-                signal = self.generate_signal(prices, current_market)
-                print(f"  信号: {signal['reason']}")
-
-                if signal['trade_up'] or signal['trade_down']:
-                    trades = self.execute_trades(current_market, prices, signal)
-                    for t in trades:
-                        print(f"  ✅ {t}")
-
-                # ── 统计 ──
-                stats = self.engine.get_statistics()
-                print(f"  累计: 订单={stats['total_orders']} 成交={stats['filled_orders']}")
-
-                await asyncio.sleep(self.check_interval)
-
-            except KeyboardInterrupt:
-                print("\n🛑 用户终止")
-                break
-            except Exception as e:
-                log_error(f"主循环错误: {e}")
-                import traceback; traceback.print_exc()
-                await asyncio.sleep(10)
-
-        self.db.close()
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
-async def main():
-    from lib.config import Config
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _ema(closes, period):
+    if len(closes) < period:
+        return closes[-1] if closes else 0
+    k = 2 / (period + 1)
+    val = sum(closes[:period]) / period
+    for p in closes[period:]:
+        val = p * k + val * (1 - k)
+    return val
+
+
+def _rsi(closes, period=14):
+    if len(closes) < period + 1:
+        return 50.0
+    gains, losses = [], []
+    for i in range(-period, 0):
+        diff = closes[i] - closes[i - 1]
+        (gains if diff > 0 else losses).append(abs(diff))
+    ag = sum(gains) / period if gains else 0
+    al = sum(losses) / period if losses else 1e-9
+    return 100 - 100 / (1 + ag / al)
+
+
+def _build_scorer_signals(klines, scorer: DirectionScorer):
+    closes = extract_closes(klines)
+    vols = extract_volumes(klines)
+    if len(closes) < 10:
+        return {}
+    ef = _ema(closes, 3)
+    es = _ema(closes, 8)
+    pef = _ema(closes[:-1], 3) if len(closes) > 3 else ef
+    pes = _ema(closes[:-1], 8) if len(closes) > 8 else es
+    rsi = _rsi(closes)
+    prsi = _rsi(closes[:-1]) if len(closes) > 15 else rsi
+    avg_vol = sum(vols[:-1]) / max(len(vols) - 1, 1)
+    pc = (closes[-1] - closes[-2]) if len(closes) >= 2 else 0
+    return {
+        "ema_cross": scorer.score_ema_cross(ef, es, pef, pes),
+        "rsi_trend": scorer.score_rsi(rsi, prsi),
+        "volume_surge": scorer.score_volume_surge(vols[-1], avg_vol, pc),
+    }
+
+
+def _risk_ok(state: BotState, config: Config) -> tuple:
+    """Return (ok, reason)."""
+    state._maybe_reset_daily()
+    if state.daily_pnl <= -abs(config.daily_loss_limit):
+        return False, f"daily_loss_limit hit ({state.daily_pnl:.2f})"
+    if state.daily_trade_count >= config.daily_trade_limit:
+        return False, f"daily_trade_limit hit ({state.daily_trade_count})"
+    if state.consecutive_losses >= config.consecutive_loss_limit:
+        return False, f"consecutive_loss_limit hit ({state.consecutive_losses})"
+    return True, "ok"
+
+
+# ---------------------------------------------------------------------------
+# Strategy runners
+# ---------------------------------------------------------------------------
+
+async def _run_imbalance(client, engine, db, state, config, cycle):
+    """Late-entry single-side imbalance strategy."""
+    event = client.get_current_btc_5m_market()
+    if not event:
+        log_warn("No active market found.")
+        return
+
+    markets = event.get("markets", [])
+    active = [m for m in markets if m.get("acceptingOrders", False) and not m.get("closed", True)]
+    if not active:
+        return
+
+    market = active[0]
+    slug = market.get("market_slug", "unknown")
+    tokens = market.get("tokens") or []
+    if len(tokens) < 2:
+        return
+
+    up_token_id = tokens[0].get("token_id") if isinstance(tokens[0], dict) else tokens[0]
+    down_token_id = tokens[1].get("token_id") if isinstance(tokens[1], dict) else tokens[1]
+
+    try:
+        up_book = client.get_orderbook(up_token_id)
+        down_book = client.get_orderbook(down_token_id)
+        up_p = client.calculate_mid_price(up_book)
+        down_p = client.calculate_mid_price(down_book)
+    except Exception as exc:
+        log_error(f"Orderbook fetch error: {exc}")
+        return
+
+    up_ask = up_p.get("ask", 0.5)
+    down_ask = down_p.get("ask", 0.5)
+    dominant_price = max(up_ask, down_ask)
+    spread_pct = abs(up_ask - down_ask)
+
+    # Imbalance: dominant side must be >= dominance_threshold
+    if dominant_price < config.dominance_threshold:
+        log_info(f"[imbalance] No dominance: up={up_ask:.3f} down={down_ask:.3f}")
+        return
+
+    # Pick strong side
+    if up_ask >= down_ask:
+        main_ask, main_token, main_outcome = up_ask, up_token_id, "UP"
+        hedge_ask, hedge_token, hedge_outcome = down_ask, down_token_id, "DOWN"
+    else:
+        main_ask, main_token, main_outcome = down_ask, down_token_id, "DOWN"
+        hedge_ask, hedge_token, hedge_outcome = up_ask, up_token_id, "UP"
+
+    seconds_remaining = 300  # approximate
+
+    decision, reason = make_trade_decision(
+        seconds_remaining=seconds_remaining,
+        min_remaining_seconds=config.min_secs_main_entry,
+        main_ask=main_ask,
+        main_max_price=config.main_max_price,
+        hedge_ask=hedge_ask,
+        hedge_max_price=config.hedge_max_price_decision,
+        spread_pct=spread_pct,
+        max_spread_pct=config.max_spread_pct,
+        depth_ok=True,
+        hard_stop_secs=config.hard_stop_new_entry_sec,
+        enable_hedge=config.enable_hedge,
+    )
+
+    log_info(format_decision_log(cycle, slug, decision, reason, main_ask, seconds_remaining))
+
+    if decision == SKIP:
+        return
+
+    ts = datetime.now(timezone.utc).isoformat()
+
+    # Place HEDGE first (if applicable), then MAIN
+    if decision == ENTER_MAIN_AND_HEDGE:
+        hedge_id = engine.place_order(hedge_token, "buy", hedge_ask, config.hedge_notional)
+        db.save_trade({
+            "order_id": hedge_id, "token_id": hedge_token, "side": "buy",
+            "price": hedge_ask, "size": config.hedge_notional,
+            "timestamp": ts, "outcome": hedge_outcome, "market_slug": slug,
+        })
+        log_info(f"[imbalance] HEDGE placed: {hedge_outcome}@{hedge_ask:.4f}")
+
+    main_id = engine.place_order(main_token, "buy", main_ask, config.main_bet_size_usdc)
+    db.save_trade({
+        "order_id": main_id, "token_id": main_token, "side": "buy",
+        "price": main_ask, "size": config.main_bet_size_usdc,
+        "timestamp": ts, "outcome": main_outcome, "market_slug": slug,
+    })
+    log_info(f"[imbalance] MAIN placed: {main_outcome}@{main_ask:.4f}")
+
+    pos = MarketPosition(
+        market_slug=slug, outcome=main_outcome, token_id=main_token,
+        entry_price=main_ask, size=config.main_bet_size_usdc, entry_ts=ts,
+        hedge_outcome=hedge_outcome if decision == ENTER_MAIN_AND_HEDGE else None,
+        hedge_token_id=hedge_token if decision == ENTER_MAIN_AND_HEDGE else None,
+        hedge_price=hedge_ask if decision == ENTER_MAIN_AND_HEDGE else None,
+        hedge_size=config.hedge_notional if decision == ENTER_MAIN_AND_HEDGE else None,
+    )
+    state.add_open_position(pos)
+    state.save()
+
+
+async def _run_directional(client, engine, db, state, config, cycle):
+    """EMA+ATR directional strategy using BTC klines."""
+    klines = get_btc_klines(interval="1m", limit=30)
+    if not klines:
+        log_warn("[directional] No kline data.")
+        return
+
+    strat = DirectionalStrategy(
+        fast_period=config.ema_fast_period,
+        slow_period=config.ema_slow_period,
+        atr_period=config.atr_period,
+        atr_threshold_pct=config.atr_threshold_pct,
+        max_entry_price=config.max_entry_price,
+        bet_size=config.bet_size,
+        signal_buffer=config.ema_signal_buffer,
+    )
+    signal = strat.generate_signal(klines)
+    log_info(f"[directional] signal={signal}")
+
+    if signal == "SKIP":
+        return
+
+    event = client.get_current_btc_5m_market()
+    if not event:
+        return
+
+    markets = event.get("markets", [])
+    active = [m for m in markets if m.get("acceptingOrders", False) and not m.get("closed", True)]
+    if not active:
+        return
+
+    market = active[0]
+    slug = market.get("market_slug", "unknown")
+    tokens = market.get("tokens") or []
+    if len(tokens) < 2:
+        return
+
+    up_token_id = tokens[0].get("token_id") if isinstance(tokens[0], dict) else tokens[0]
+    down_token_id = tokens[1].get("token_id") if isinstance(tokens[1], dict) else tokens[1]
+
+    try:
+        up_book = client.get_orderbook(up_token_id)
+        down_book = client.get_orderbook(down_token_id)
+        up_p = client.calculate_mid_price(up_book)
+        down_p = client.calculate_mid_price(down_book)
+    except Exception as exc:
+        log_error(f"Orderbook fetch error: {exc}")
+        return
+
+    up_ask = up_p.get("ask", 0.5)
+    down_ask = down_p.get("ask", 0.5)
+
+    order = strat.decide_bet(signal, up_ask, down_ask, up_token_id, down_token_id)
+    if not order:
+        return
+
+    ts = datetime.now(timezone.utc).isoformat()
+    oid = engine.place_order(order["token_id"], "buy", order["price"], order["size"])
+    db.save_trade({
+        "order_id": oid, "token_id": order["token_id"], "side": "buy",
+        "price": order["price"], "size": order["size"],
+        "timestamp": ts, "outcome": order["outcome"], "market_slug": slug,
+    })
+    log_info(f"[directional] {order['outcome']}@{order['price']:.4f} size={order['size']}")
+    state.add_open_position(MarketPosition(
+        market_slug=slug, outcome=order["outcome"], token_id=order["token_id"],
+        entry_price=order["price"], size=order["size"], entry_ts=ts,
+    ))
+    state.save()
+
+
+async def _run_momentum_hedge(client, engine, db, state, config, cycle, mh_strategy):
+    """Momentum hedge strategy: fire on dominant side >= threshold."""
+    event = client.get_current_btc_5m_market()
+    if not event:
+        return
+
+    markets = event.get("markets", [])
+    active = [m for m in markets if m.get("acceptingOrders", False) and not m.get("closed", True)]
+    if not active:
+        return
+
+    market = active[0]
+    slug = market.get("market_slug", "unknown")
+    tokens = market.get("tokens") or []
+    if len(tokens) < 2:
+        return
+
+    up_token_id = tokens[0].get("token_id") if isinstance(tokens[0], dict) else tokens[0]
+    down_token_id = tokens[1].get("token_id") if isinstance(tokens[1], dict) else tokens[1]
+
+    try:
+        up_book = client.get_orderbook(up_token_id)
+        down_book = client.get_orderbook(down_token_id)
+        up_p = client.calculate_mid_price(up_book)
+        down_p = client.calculate_mid_price(down_book)
+    except Exception as exc:
+        log_error(f"Orderbook fetch error: {exc}")
+        return
+
+    up_ask = up_p.get("ask", 0.5)
+    down_ask = down_p.get("ask", 0.5)
+
+    orders = mh_strategy.generate_orders(slug, up_ask, down_ask, up_token_id, down_token_id)
+    if not orders:
+        return
+
+    ts = datetime.now(timezone.utc).isoformat()
+    for order in orders:
+        oid = engine.place_order(order["token_id"], "buy", order["price"], order["size"])
+        db.save_trade({
+            "order_id": oid, "token_id": order["token_id"], "side": "buy",
+            "price": order["price"], "size": order["size"],
+            "timestamp": ts, "outcome": order["outcome"], "market_slug": slug,
+        })
+        log_info(f"[momentum_hedge] {order['role']} {order['outcome']}@{order['price']:.4f}")
+
+    main_order = next((o for o in orders if o.get("role") == "main"), orders[-1])
+    state.add_open_position(MarketPosition(
+        market_slug=slug, outcome=main_order["outcome"], token_id=main_order["token_id"],
+        entry_price=main_order["price"], size=main_order["size"], entry_ts=ts,
+    ))
+    state.save()
+
+
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
+
+async def run_continuous():
     config = Config()
-    bot = ContinuousGridTrader(dry_run=config.dry_run)
-    await bot.run()
+    client = PolymarketClient()
+    engine = TradingEngine(dry_run=config.dry_run)
+    db = DataPersistence(db_path="bot_data.db")
+    state = BotState.load()
+    mh_strategy = MomentumHedgeStrategy(
+        trigger_threshold=config.trigger_threshold,
+        total_bet_size=config.total_bet_size,
+        use_dynamic_ratio=config.use_dynamic_ratio,
+        fixed_hedge_ratio=config.fixed_hedge_ratio,
+        win_rate_slope=config.win_rate_slope,
+        max_trigger_price=config.max_trigger_price,
+    )
+
+    strategy_name = config.strategy.lower()
+    poll_secs = config.polling_interval / 1000
+
+    print(f"""
+╔═══════════════════════════════════════════════╗
+║   Polymarket Bot — Continuous Mode            ║
+║   Strategy : {strategy_name:<30} ║
+║   DRY_RUN  : {str(config.dry_run):<30} ║
+╚═══════════════════════════════════════════════╝
+    """)
+
+    cycle = 0
+    while True:
+        cycle += 1
+        try:
+            log_info(f"── Cycle #{cycle} | strategy={strategy_name} ──")
+
+            # Risk gate
+            ok, reason = _risk_ok(state, config)
+            if not ok:
+                log_warn(f"Risk gate blocked: {reason}")
+                await asyncio.sleep(poll_secs)
+                continue
+
+            if strategy_name == "directional":
+                await _run_directional(client, engine, db, state, config, cycle)
+            elif strategy_name == "momentum_hedge":
+                await _run_momentum_hedge(client, engine, db, state, config, cycle, mh_strategy)
+            else:
+                await _run_imbalance(client, engine, db, state, config, cycle)
+
+            stats = engine.get_statistics()
+            log_info(
+                f"Stats: orders={stats['total_orders']} "
+                f"filled={stats['filled_orders']} "
+                f"trades={stats['total_trades']}"
+            )
+
+        except KeyboardInterrupt:
+            log_info("🛑 Stopping...")
+            break
+        except Exception as exc:
+            log_error(f"Cycle error: {exc}")
+
+        await asyncio.sleep(poll_secs)
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(run_continuous())

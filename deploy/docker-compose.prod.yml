@@ -1,0 +1,21 @@
+services:
+  bot:
+    build: ..
+    container_name: polymarket-bot-prod
+    env_file:
+      - .env.production
+    volumes:
+      - ../bot_data.db:/app/bot_data.db
+      - ../bot_state.json:/app/bot_state.json
+      - ../logs:/app/logs
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"

@@ -1,0 +1,15 @@
+.git
+node_modules
+.env
+.env.local
+scripts/
+__pycache__
+*.pyc
+*.db
+bot_state.json
+simulate_state.json
+logs/
+.venv/
+.DS_Store
+.vscode/
+.idea/
