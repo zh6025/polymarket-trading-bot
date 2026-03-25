@@ -1,5 +1,5 @@
-from typing import List, Dict, Any, Tuple
-from lib.utils import round_to_tick, log_info
+from typing import List, Dict, Any, Optional, Tuple
+from lib.utils import round_to_tick, log_info, log_warn
 
 class GridStrategy:
     """Grid Trading Strategy"""
@@ -117,3 +117,141 @@ class GridStrategy:
             self.orders,
             key=lambda o: (o['outcome'], o['price'])
         )
+
+
+class ProductionDecisionStrategy:
+    """
+    Production-grade decision layer that combines DirectionScorer output with
+    price-window filters to decide whether to enter a main/hedge pair trade.
+
+    Parameters
+    ----------
+    min_confidence : float
+        Minimum scorer confidence required to trade (default 0.15).
+    main_price_min / main_price_max : float
+        Allowed price window for the main (YES) position.
+    hedge_price_min / hedge_price_max : float
+        Allowed price window for the hedge (NO) position.
+    """
+
+    def __init__(
+        self,
+        min_confidence: float = 0.15,
+        main_price_min: float = 0.50,
+        main_price_max: float = 0.65,
+        hedge_price_min: float = 0.05,
+        hedge_price_max: float = 0.15,
+    ):
+        self.min_confidence = min_confidence
+        self.main_price_min = main_price_min
+        self.main_price_max = main_price_max
+        self.hedge_price_min = hedge_price_min
+        self.hedge_price_max = hedge_price_max
+
+    def decide(
+        self,
+        scorer_result: Dict[str, Any],
+        yes_mid: float,
+        no_mid: float,
+    ) -> Dict[str, Any]:
+        """
+        Decide whether to enter a trade based on scorer output and price windows.
+
+        Parameters
+        ----------
+        scorer_result : dict
+            Output from DirectionScorer.compute_final_score().
+        yes_mid : float
+            Mid-price of the YES token.
+        no_mid : float
+            Mid-price of the NO token.
+
+        Returns
+        -------
+        dict with keys:
+            action        : str   'ENTER' | 'SKIP'
+            reason        : str   Human-readable reason for the decision.
+            direction     : str   'BUY_YES' | 'BUY_NO' | 'SKIP'
+            probability   : float
+            confidence    : float
+            main_price    : float  Suggested main bet price.
+            hedge_price   : float  Suggested hedge bet price.
+        """
+        direction = scorer_result.get("direction", "SKIP")
+        probability = scorer_result.get("probability", 0.5)
+        confidence = scorer_result.get("confidence", 0.0)
+
+        # 1. Confidence gate
+        if confidence < self.min_confidence:
+            reason = (
+                f"confidence {confidence:.4f} < min_confidence {self.min_confidence}"
+            )
+            log_warn(f"[Strategy] SKIP — {reason}")
+            return self._skip(reason, direction, probability, confidence, yes_mid, no_mid)
+
+        # 2. Direction must not be SKIP from the scorer
+        if direction == "SKIP":
+            reason = "scorer returned SKIP"
+            log_warn(f"[Strategy] SKIP — {reason}")
+            return self._skip(reason, direction, probability, confidence, yes_mid, no_mid)
+
+        # 3. Price window filters
+        # For BUY_YES: main=YES, hedge=NO
+        # For BUY_NO:  main=NO,  hedge=YES
+        if direction == "BUY_YES":
+            main_price = yes_mid
+            hedge_price = no_mid
+        else:
+            main_price = no_mid
+            hedge_price = yes_mid
+
+        if not (self.main_price_min <= main_price <= self.main_price_max):
+            reason = (
+                f"main_price {main_price:.4f} outside window "
+                f"[{self.main_price_min}, {self.main_price_max}]"
+            )
+            log_warn(f"[Strategy] SKIP — {reason}")
+            return self._skip(reason, direction, probability, confidence, yes_mid, no_mid)
+
+        if not (self.hedge_price_min <= hedge_price <= self.hedge_price_max):
+            reason = (
+                f"hedge_price {hedge_price:.4f} outside window "
+                f"[{self.hedge_price_min}, {self.hedge_price_max}]"
+            )
+            log_warn(f"[Strategy] SKIP — {reason}")
+            return self._skip(reason, direction, probability, confidence, yes_mid, no_mid)
+
+        reason = (
+            f"direction={direction} prob={probability:.4f} "
+            f"conf={confidence:.4f} main_price={main_price:.4f} "
+            f"hedge_price={hedge_price:.4f}"
+        )
+        log_info(f"[Strategy] ENTER — {reason}")
+        return {
+            "action": "ENTER",
+            "reason": reason,
+            "direction": direction,
+            "probability": probability,
+            "confidence": confidence,
+            "main_price": main_price,
+            "hedge_price": hedge_price,
+        }
+
+    @staticmethod
+    def _skip(
+        reason: str,
+        direction: str,
+        probability: float,
+        confidence: float,
+        yes_mid: float,
+        no_mid: float,
+    ) -> Dict[str, Any]:
+        return {
+            "action": "SKIP",
+            "reason": reason,
+            "direction": direction,
+            "probability": probability,
+            "confidence": confidence,
+            "main_price": yes_mid,
+            "hedge_price": no_mid,
+        }
