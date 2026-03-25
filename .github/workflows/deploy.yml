@@ -4,12 +4,12 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:   # 支持手动触发
+  workflow_dispatch:
 
 jobs:
-  # ============ 第一步：构建测试 ============
+  # ── Step 1: build & smoke-test ────────────────────────────────────────────
   test:
-    name: 🧪 Build & Test (Dry-Run)
+    name: 🧪 Build & Dry-Run Test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -28,19 +28,25 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: ✅ Run bot dry-run test
+      - name: ✅ Dry-run smoke test (bot_runner.py)
         env:
           API_KEY: demo-key
           DRY_RUN: "true"
-          SERIES_SLUG: btc-up-or-down-5m
-          LEVELS_EACH_SIDE: "3"
-          GRID_STEP: "0.02"
-          ORDER_SIZE: "1"
-          TRADE_BOTH_OUTCOMES: "true"
-          DAILY_LOSS_LIMIT: "100"
+          TRADING_ENABLED: "true"
+          LOG_LEVEL: INFO
+          MIN_ORDER_SIZE: "5"
           MAX_POSITION_SIZE: "500"
-          POLLING_INTERVAL: "60000"
-          LOG_LEVEL: info
+          MAX_DAILY_LOSS: "100"
+          DAILY_LOSS_LIMIT_USDC: "100"
+          MAX_TRADES_PER_DAY: "50"
+          COOLDOWN_SECONDS: "30"
+          CONSECUTIVE_LOSS_LIMIT: "5"
+          MIN_MAIN_PRICE: "0.55"
+          MAX_MAIN_PRICE: "0.80"
+          MIN_HEDGE_PRICE: "0.15"
+          MAX_HEDGE_PRICE: "0.45"
+          HARD_STOP_NEW_ENTRY_SEC: "60"
+          MIN_WIN_PROB: "0.55"
         run: |
           echo "Running bot_runner.py in dry-run mode..."
           timeout 30 python bot_runner.py || true
@@ -51,11 +57,11 @@ jobs:
           docker build -t polymarket-bot:test .
           echo "✅ Docker image built successfully"
 
-  # ============ 第二步：SSH 部署到 AWS 东京 ============
+  # ── Step 2: SSH deploy to AWS Tokyo ──────────────────────────────────────
   deploy:
     name: 🌏 Deploy to AWS Tokyo (ap-northeast-1)
     runs-on: ubuntu-latest
-    needs: test          # 必须测试通过才部署
+    needs: test
     if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
@@ -84,17 +90,17 @@ jobs:
             echo "📥 Pulling latest code from main..."
             git pull origin main
 
-            echo "🐳 Rebuilding Docker image..."
-            docker-compose build --no-cache bot
+            echo "�� Rebuilding Docker image..."
+            docker compose build --no-cache bot
 
             echo "🔄 Restarting bot container..."
-            docker-compose up -d --force-recreate bot
+            docker compose up -d --force-recreate bot
 
             echo "🧹 Cleaning up old images..."
             docker image prune -f
 
             echo "📊 Bot status:"
-            docker-compose ps
+            docker compose ps
 
             echo "✅ Deployment complete!"
           ENDSSH

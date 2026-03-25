@@ -1,69 +1,60 @@
-from typing import Dict, Any, Optional
-from lib.utils import log_warn, log_info
+"""Risk management for the production single-shot bot runner."""
+
+import logging
+import time
+from typing import Dict, Any
+
+logger = logging.getLogger(__name__)
+
 
 class RiskManager:
-    """Risk Management Module"""
-    
-    def __init__(self, config: Dict[str, Any]):
-        """Initialize risk manager with config"""
+    """
+    Per-run risk gatekeeper used by bot_runner.py.
+
+    Accepts a config object (from lib.config.load_config) and checks
+    whether entering a new position is safe given current PnL and state.
+    """
+
+    def __init__(self, config):
         self.config = config
-        self.daily_loss = 0.0
-        self.positions = {}  # outcome -> {size, avg_price, pnl}
-        self.circuit_breaker_triggered = False
-    
-    def check_daily_loss_limit(self, current_pnl: float) -> bool:
-        """Check if daily loss limit exceeded"""
-        limit = self.config.get('daily_loss_limit', 1000)
-        
-        if current_pnl < -limit:
-            log_warn(f"⛔ Daily loss limit exceeded: {current_pnl} < -{limit}")
-            self.circuit_breaker_triggered = True
-            return False
-        
-        return True
-    
-    def check_position_limit(self, outcome: str, size: float) -> bool:
-        """Check if position limit exceeded"""
-        limit = self.config.get('max_position_size', 5000)
-        
-        current_pos = self.positions.get(outcome, {}).get('size', 0)
-        
-        if current_pos + size > limit:
-            log_warn(f"⛔ Position limit exceeded for {outcome}: {current_pos + size} > {limit}")
-            return False
-        
-        return True
-    
-    def update_position(self, outcome: str, size: float, price: float):
-        """Update position after trade"""
-        if outcome not in self.positions:
-            self.positions[outcome] = {'size': 0, 'avg_price': 0, 'pnl': 0}
-        
-        pos = self.positions[outcome]
-        total_size = pos['size'] + size;
-        
-        if total_size != 0:
-            pos['avg_price'] = (pos['size'] * pos['avg_price'] + size * price) / total_size
-            pos['size'] = total_size
-        else:
-            pos['size'] = 0
-            pos['avg_price'] = 0
-    
-    def calculate_total_pnl(self, current_prices: Dict[str, float]) -> float:
-        """Calculate total PnL"""
-        total_pnl = 0.0
-        
-        for outcome, pos in self.positions.items():
-            if pos['size'] != 0 and outcome in current_prices:
-                pnl = pos['size'] * (current_prices[outcome] - pos['avg_price'])
-                total_pnl += pnl
-        
-        return total_pnl
-    
-    def get_status(self) -> Dict[str, Any]:
-        """Get risk manager status"""
-        return {
-            'circuit_breaker_triggered': self.circuit_breaker_triggered,
-            'positions': self.positions,
-            'daily_loss': self.daily_loss
-        }
+        self._cooldown_ts: Dict[str, int] = {}
+
+    def check_global_risk(
+        self,
+        market_id: str,
+        current_pnl: float,
+        now_ts: int,
+    ) -> tuple:
+        """
+        Return (allowed: bool, reason: str).
+
+        Checks:
+        - Daily loss limit
+        - Per-market cooldown
+        - Consecutive loss limit (delegated to caller via state)
+        """
+        cfg = self.config
+
+        # Daily loss limit
+        if current_pnl <= -cfg.daily_loss_limit_usdc:
+            reason = (
+                f"Daily loss limit reached: pnl={current_pnl:.2f} "
+                f"<= -{cfg.daily_loss_limit_usdc}"
+            )
+            logger.warning(reason)
+            return False, reason
+
+        # Cooldown check
+        last_trade_ts = self._cooldown_ts.get(market_id, 0)
+        if now_ts - last_trade_ts < cfg.cooldown_seconds:
+            wait = cfg.cooldown_seconds - (now_ts - last_trade_ts)
+            reason = f"Cooldown active for {market_id}: {wait}s remaining"
+            logger.info(reason)
+            return False, reason
+
+        return True, "ok"
+
+    def record_trade(self, market_id: str, now_ts: int) -> None:
+        """Record that a trade was placed for cooldown tracking."""
+        self._cooldown_ts[market_id] = now_ts
+        logger.info(f"Trade recorded for market {market_id} at ts={now_ts}")
