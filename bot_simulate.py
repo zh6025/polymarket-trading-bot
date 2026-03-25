@@ -1,6 +1,7 @@
-﻿import asyncio
+import asyncio
 import logging
 from datetime import datetime
+from lib.config import load_config
 from lib.polymarket_client import PolymarketClient
 from lib.trading_engine import TradingEngine
 from lib.data_persistence import DataPersistence
@@ -12,9 +13,19 @@ class ProfitOptimizedStrategy:
     """优化盈利的交易策略"""
     
     def __init__(self):
-        self.client = PolymarketClient()
-        self.engine = TradingEngine(dry_run=True)
-        self.db = DataPersistence()
+        config = load_config()
+        self.client = PolymarketClient(
+            host=config.host,
+            chain_id=config.chain_id,
+            private_key=config.private_key,
+            proxy_address=config.proxy_address,
+        )
+        self.engine = TradingEngine(
+            min_order_size=config.min_order_size,
+            imbalance_threshold=config.imbalance_threshold,
+            min_spread=config.min_spread,
+        )
+        self.db = DataPersistence(config.db_path)
         self.price_history = {}
         self.max_history = 100
     

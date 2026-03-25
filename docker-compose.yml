@@ -90,7 +90,7 @@ services:
       DRY_RUN: "true"
       TRADING_ENABLED: "false"
     ports:
-      - "8501:8501"
+      - "5000:5000"
     command: ["python", "web_dashboard.py"]
     volumes:
       - ./bot_data.db:/app/bot_data.db

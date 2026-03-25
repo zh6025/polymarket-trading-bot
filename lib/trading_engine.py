@@ -71,3 +71,10 @@ class TradingEngine:
             )
 
         return None
+    def get_statistics(self) -> dict:
+        return {
+            "total_orders": 0,
+            "filled_orders": 0,
+            "total_trades": 0,
+            "unrealized_pnl": 0.0,
+        }
