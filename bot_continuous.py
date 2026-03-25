@@ -1,313 +1,254 @@
+#!/usr/bin/env python3
+"""
+Continuous polling loop for the Polymarket BTC 5m market-making bot.
+
+Runs indefinitely, refreshing the active market every ~5 minutes and
+placing market-making orders on each poll tick.
+"""
+
 import os
 import asyncio
+import json
+import re
 import logging
-from datetime import datetime
-from typing import Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Dict, Optional
+
+from lib.config import load_config
 from lib.polymarket_client import PolymarketClient
-from lib.trading_engine import TradingEngine
+from lib.trading_engine import TradingEngine, BookLevel, OrderBookSnapshot
 from lib.data_persistence import DataPersistence
+from lib.risk_manager import RiskManager
 from lib.utils import log_info, log_error, log_warn
 
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s] %(message)s",
+)
+
+BANNER = """
+╔══════════════════════════════════════════════════════╗
+║    Polymarket BTC 5m Bot — Continuous Loop           ║
+╚══════════════════════════════════════════════════════╝"""
+
 
 class MarketExpiredError(Exception):
-    """市场已结算，token失效"""
-    pass
+    """Raised when a market token returns 404 (market has settled)."""
 
-class ContinuousGridTrader:
-    """连续5分钟周期BTC网格交易机器人"""
 
-    def __init__(self, dry_run=True):
-        self.client = PolymarketClient()
-        self.engine = TradingEngine(dry_run=dry_run)
-        self.db = DataPersistence()
-        self.dry_run = dry_run
+def _parse_book(raw: dict) -> OrderBookSnapshot:
+    """Convert a raw CLOB order-book dict to an OrderBookSnapshot."""
+    bids = raw.get("bids", [])
+    asks = raw.get("asks", [])
+    best_bid = BookLevel(float(bids[-1]["price"]), float(bids[-1]["size"])) if bids else None
+    best_ask = BookLevel(float(asks[-1]["price"]), float(asks[-1]["size"])) if asks else None
+    return OrderBookSnapshot(best_bid=best_bid, best_ask=best_ask)
 
-        self.check_interval = 5     # 每5秒轮询一次orderbook
+
+class ContinuousBot:
+    """Market-making bot that polls the order book and places orders."""
+
+    def __init__(self, config):
+        self.config = config
+        self.dry_run = config.dry_run
+
+        self.client = PolymarketClient(
+            host=config.host,
+            chain_id=config.chain_id,
+            private_key=config.private_key,
+            proxy_address=config.proxy_address,
+        )
+        self.engine = TradingEngine(
+            min_order_size=config.min_order_size,
+            imbalance_threshold=config.imbalance_threshold,
+            min_spread=config.min_spread,
+            dry_run=config.dry_run,
+        )
+        self.db = DataPersistence(config.db_path)
+        self.risk = RiskManager(
+            max_position_size=config.max_position_size,
+            max_daily_loss=config.max_daily_loss,
+            max_trades_per_day=config.max_trades_per_day,
+            cooldown_seconds=config.cooldown_seconds,
+        )
+
+        self.poll_interval = config.orderbook_poll_seconds
         self.total_cycles = 0
-        self.market_prices = {}     # token_id -> [价格历史]
 
-    # ─────────────────────────────────────────
-    # 市场选择（以Polymarket时间为准）
-    # ─────────────────────────────────────────
+    # ── Market discovery ─────────────────────────────────────────────────────
+
     def find_active_market(self) -> Optional[Dict]:
-        """获取当前活跃的BTC 5分钟市场（直接读Polymarket API）"""
-        import json as _json
+        """Return a dict describing the current BTC 5m market, or None."""
         event = self.client.get_current_btc_5m_market()
         if not event:
             return None
 
-        for m in event.get('markets', []):
-            if not m.get('acceptingOrders', False):
+        for m in event.get("markets", []):
+            if not m.get("acceptingOrders", False) or m.get("closed", False):
                 continue
-            if m.get('closed', False):
-                continue
-
-            raw = m.get('clobTokenIds', '[]')
-            token_ids = _json.loads(raw) if isinstance(raw, str) else raw
+            raw = m.get("clobTokenIds", "[]")
+            token_ids = json.loads(raw) if isinstance(raw, str) else raw
             if len(token_ids) < 2:
                 continue
-
             return {
-                'title':    event.get('title', ''),
-                'question': m.get('question', ''),
-                'up_token':   token_ids[0],
-                'down_token': token_ids[1],
-                'tick_size':  float(m.get('orderPriceMinTickSize', 0.01)),
-                'min_size':   float(m.get('orderMinSize', 5)),
+                "title": event.get("title", ""),
+                "slug": event.get("slug", ""),
+                "question": m.get("question", ""),
+                "up_token": token_ids[0],
+                "down_token": token_ids[1],
+                "tick_size": float(m.get("orderPriceMinTickSize", 0.01)),
+                "min_size": float(m.get("orderMinSize", self.config.min_order_size)),
             }
         return None
 
-    # ─────────────────────────────────────────
-    # 价格分析（做市商视角）
-    # ─────────────────────────────────────────
-    def get_prices(self, market: Dict) -> Optional[Dict]:
-        """获取UP/DOWN当前价格，验证互补性"""
+    def _market_start_ts(self, market: Dict) -> Optional[int]:
+        slug = market.get("slug", "") or market.get("title", "")
+        match = re.search(r"btc-updown-5m-(\d+)", slug)
+        return int(match.group(1)) if match else None
+
+    # ── Order-book helpers ───────────────────────────────────────────────────
+
+    def _fetch_books(self, market: Dict) -> tuple:
+        """Return (up_book_raw, down_book_raw) or raise MarketExpiredError."""
         try:
-            up_book   = self.client.get_orderbook(market['up_token'])
-            down_book = self.client.get_orderbook(market['down_token'])
+            up_raw = self.client.get_orderbook(market["up_token"])
+            down_raw = self.client.get_orderbook(market["down_token"])
+            return up_raw, down_raw
+        except Exception as exc:
+            if "404" in str(exc) or "Not Found" in str(exc):
+                raise MarketExpiredError(f"Token expired (404): {exc}") from exc
+            raise
 
-            up_p   = self.client.calculate_mid_price(up_book)
-            down_p = self.client.calculate_mid_price(down_book)
+    def _get_mid(self, raw_book: dict) -> Dict:
+        return self.client.calculate_mid_price(raw_book)
 
-            # mid为None说明orderbook单边或为空，跳过
-            if up_p['mid'] is None or down_p['mid'] is None:
-                log_warn("orderbook异常，跳过本轮")
-                return None
+    # ── Trade execution ──────────────────────────────────────────────────────
 
-            total = up_p['mid'] + down_p['mid']
-            log_info(f"UP={up_p['mid']:.4f} DOWN={down_p['mid']:.4f} 合计={total:.4f}")
+    def _maybe_trade(self, market: Dict, up_raw: dict, down_raw: dict) -> None:
+        """Evaluate books and place orders if the signal is positive."""
+        up_snap = _parse_book(up_raw)
+        down_snap = _parse_book(down_raw)
 
-            # UP+DOWN应接近1（允许±0.05误差）
-            if not (0.95 <= total <= 1.05):
-                log_warn(f"价格互补性异常: UP+DOWN={total:.4f}，跳过")
-                return None
+        signal = self.engine.evaluate(up_snap, down_snap)
+        if signal is None:
+            log_info("No signal this tick")
+            return
 
-            return {
-                'up_bid':   up_p['bid'],   'up_ask':   up_p['ask'],   'up_mid':   up_p['mid'],
-                'down_bid': down_p['bid'], 'down_ask': down_p['ask'], 'down_mid': down_p['mid'],
-                'spread_up':   up_p['ask']   - up_p['bid'],
-                'spread_down': down_p['ask'] - down_p['bid'],
-                'timestamp': datetime.now(),
-            }
-        except Exception as e:
-            log_error(f"获取价格失败: {e}")
-            if "404" in str(e) or "Not Found" in str(e):
-                raise MarketExpiredError(f"市场token已失效(404): {e}")
-            return None
+        token_id = market["up_token"] if signal.should_buy_yes else market["down_token"]
+        side_label = "UP" if signal.should_buy_yes else "DOWN"
 
-    def record_prices(self, token_id: str, mid: float):
-        """记录价格历史（最多保留30个点）"""
-        if token_id not in self.market_prices:
-            self.market_prices[token_id] = []
-        self.market_prices[token_id].append(mid)
-        if len(self.market_prices[token_id]) > 30:
-            self.market_prices[token_id].pop(0)
+        existing_pos = self.db.get_open_position(token_id)
+        current_size = existing_pos.size if existing_pos else 0.0
 
-    def get_volatility(self, token_id: str) -> float:
-        """计算价格波动率"""
-        prices = self.market_prices.get(token_id, [])
-        if len(prices) < 3:
-            return 0.0
-        avg = sum(prices) / len(prices)
-        variance = sum((p - avg) ** 2 for p in prices) / len(prices)
-        return (variance ** 0.5) / avg if avg > 0 else 0.0
+        risk_result = self.risk.can_open_position(current_size, signal.order_size)
+        if not risk_result.allowed:
+            log_warn(f"Risk blocked trade: {risk_result.reason}")
+            return
 
-    # ─────────────────────────────────────────
-    # 信号生成（做市商策略）
-    # ─────────────────────────────────────────
-    def generate_signal(self, prices: Dict, market: Dict) -> Dict:
-        """
-        做市商策略：
-        - spread足够大（>1个tick）→ 在bid/ask之间挂单
-        - 价格接近0.5时最佳（不偏向任何方向）
-        - 价格极端（<0.05或>0.95）→ 市场快结算，不交易
-        """
-        tick = market['tick_size']
-        min_spread = tick * 1  # 最小有效价差（需要3个tick才有利润空间）
+        log_info(f"Signal: BUY {side_label} @ {signal.target_price:.4f} x {signal.order_size} — {signal.reason}")
 
-        signal = {
-            'trade_up':   False,
-            'trade_down': False,
-            'reason':     '',
-        }
-
-        up_mid   = prices['up_mid']
-        down_mid = prices['down_mid']
-
-        # 价格极端判断（市场快结算）
-        if up_mid < 0.005 or up_mid > 0.995:
-            signal['reason'] = f"UP价格极端({up_mid:.3f})，市场可能快结算，不交易"
-            return signal
-
-        # 价差判断
-        if prices['spread_up'] >= min_spread:
-            signal['trade_up'] = True
-        if prices['spread_down'] >= min_spread:
-            signal['trade_down'] = True
-
-        if signal['trade_up'] or signal['trade_down']:
-            signal['reason'] = (
-                f"价差UP={prices['spread_up']:.4f} "
-                f"DOWN={prices['spread_down']:.4f} "
-                f"最小有效价差={min_spread:.4f}"
-            )
+        if self.dry_run:
+            log_info(f"[DRY-RUN] Skipping real order placement")
         else:
-            signal['reason'] = f"价差过小，不交易"
+            result = self.client.place_order(token_id, "buy", signal.target_price, signal.order_size)
+            if result is None:
+                log_error("Order placement failed")
+                return
 
-        return signal
+        self.db.add_position(token_id, "buy", signal.target_price, signal.order_size)
+        self.db.record_trade(
+            token_id=token_id,
+            side="buy",
+            price=signal.target_price,
+            size=signal.order_size,
+        )
+        self.risk.record_trade(realized_pnl=0.0)
 
-    # ─────────────────────────────────────────
-    # 执行交易（dry_run下模拟）
-    # ─────────────────────────────────────────
-    def execute_trades(self, market: Dict, prices: Dict, signal: Dict):
-        """在bid/ask挂单做市"""
-        order_size = float(os.getenv("ORDER_SIZE", market["min_size"]))
-        tick = market['tick_size']
-        trades = []
+    # ── Main loop ─────────────────────────────────────────────────────────────
 
-        if signal['trade_up']:
-            spread = prices['spread_up']
-            if spread >= tick * 2:
-                # 价差够大：内缩1tick，赚更多
-                buy_price  = round(prices['up_bid'] + tick, 4)
-                sell_price = round(prices['up_ask'] - tick, 4)
-            else:
-                # 价差只有1tick：直接在bid买、ask卖，赚整个价差
-                buy_price  = round(prices['up_bid'], 4)
-                sell_price = round(prices['up_ask'], 4)
+    async def run(self) -> None:
+        print(BANNER)
+        mode = "🟡 DRY-RUN (no real orders)" if self.dry_run else "🔴 LIVE TRADING"
+        print(f"Mode: {mode}\n")
 
-            if buy_price < sell_price:
-                self.engine.place_order(market['up_token'], 'buy',  buy_price,  order_size)
-                self.engine.place_order(market['up_token'], 'sell', sell_price, order_size)
-                trades.append(f"UP  BUY@{buy_price:.4f} SELL@{sell_price:.4f} spread={spread:.4f}")
-
-        if signal['trade_down']:
-            spread = prices['spread_down']
-            if spread >= tick * 2:
-                buy_price  = round(prices['down_bid'] + tick, 4)
-                sell_price = round(prices['down_ask'] - tick, 4)
-            else:
-                buy_price  = round(prices['down_bid'], 4)
-                sell_price = round(prices['down_ask'], 4)
-
-            if buy_price < sell_price:
-                self.engine.place_order(market['down_token'], 'buy',  buy_price,  order_size)
-                self.engine.place_order(market['down_token'], 'sell', sell_price, order_size)
-                trades.append(f"DOWN BUY@{buy_price:.4f} SELL@{sell_price:.4f} spread={spread:.4f}")
-
-        return trades
-
-    # ─────────────────────────────────────────
-    # 主循环
-    # ─────────────────────────────────────────
-    async def run(self):
-        print("""
-╔══════════════════════════════════════════════════════╗
-║    Polymarket BTC 5分钟 做市商机器人                 ║
-╚══════════════════════════════════════════════════════╝""")
-        mode = "🟡 DRY RUN（模拟）" if self.dry_run else "🔴 真实交易"
-        print(f"模式: {mode}\n")
-
-        current_market = None
-        market_start   = None
+        current_market: Optional[Dict] = None
+        market_start_ts: Optional[int] = None
 
         while True:
             try:
-                now = datetime.now()
+                now_ts = int(datetime.now(tz=timezone.utc).timestamp())
 
-                # ── 每个5分钟窗口开始时刷新市场 ──
+                # Refresh market every ~290s (10s before expiry)
                 need_refresh = (
-                    current_market is None or
-                    market_start is None or
-                    (now - market_start).total_seconds() >= 290  # 提前10秒换市场
+                    current_market is None
+                    or market_start_ts is None
+                    or (now_ts - market_start_ts) >= 290
                 )
 
                 if need_refresh:
                     print(f"\n{'='*60}")
-                    print(f"🔍 [{now.strftime('%H:%M:%S')}] 查找当前活跃市场...")
+                    log_info("Looking for active BTC 5m market…")
                     new_market = self.find_active_market()
                     if new_market:
                         current_market = new_market
-                        # 用市场真实开始时间（从slug解析UTC时间戳）
-                        try:
-                            import re
-                            slug = new_market.get('slug', '') or new_market.get('title', '')
-                            # slug格式: btc-updown-5m-1773840300
-                            m = re.search(r'btc-updown-5m-(\d+)', slug)
-                            if m:
-                                real_start_ts = int(m.group(1))
-                                from datetime import timezone
-                                market_start = datetime.fromtimestamp(real_start_ts)
-                                log_info(f"市场真实开始时间: {market_start.strftime('%H:%M:%S')} (已过{(now-market_start).total_seconds():.0f}s)")
-                            else:
-                                market_start = now
-                        except Exception:
-                            market_start = now
-                        self.market_prices = {}  # 重置价格历史
+                        market_start_ts = self._market_start_ts(new_market) or now_ts
                         self.total_cycles += 1
-                        print(f"✅ 周期#{self.total_cycles}: {current_market['title']}")
+                        elapsed = now_ts - market_start_ts
+                        log_info(
+                            f"Cycle #{self.total_cycles}: {current_market['title']} "
+                            f"(+{elapsed}s elapsed)"
+                        )
                     else:
-                        print("⚠️  未找到活跃市场，10秒后重试...")
+                        log_warn("No active market — retrying in 10s")
                         await asyncio.sleep(10)
                         continue
 
-                # ── 获取价格 ──
+                # Fetch books
                 try:
-                    prices = self.get_prices(current_market)
-                except MarketExpiredError as e:
-                    log_warn(f"⚠️  市场已结算，强制刷新市场: {e}")
-                    current_market = None  # 强制下次循环刷新市场
-                    market_start = None
+                    up_raw, down_raw = self._fetch_books(current_market)
+                except MarketExpiredError as exc:
+                    log_warn(f"Market settled — forcing refresh: {exc}")
+                    current_market = None
+                    market_start_ts = None
                     await asyncio.sleep(5)
                     continue
-                if not prices:
-                    await asyncio.sleep(self.check_interval)
+                except Exception as exc:
+                    log_error(f"Order book fetch error: {exc}")
+                    await asyncio.sleep(self.poll_interval)
                     continue
 
-                # 记录价格历史
-                self.record_prices(current_market['up_token'],   prices['up_mid'])
-                self.record_prices(current_market['down_token'], prices['down_mid'])
+                up_mid = self._get_mid(up_raw)
+                down_mid = self._get_mid(down_raw)
+                elapsed = now_ts - (market_start_ts or now_ts)
 
-                vol_up   = self.get_volatility(current_market['up_token'])
-                elapsed  = (now - market_start).total_seconds()
+                if up_mid["mid"] is not None and down_mid["mid"] is not None:
+                    print(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] +{elapsed}s "
+                        f"UP={up_mid['mid']:.4f} DOWN={down_mid['mid']:.4f}"
+                    )
+                    self._maybe_trade(current_market, up_raw, down_raw)
+                else:
+                    log_warn("Incomplete order book — skipping tick")
 
-                print(f"\n[{now.strftime('%H:%M:%S')}] +{elapsed:.0f}s "
-                      f"UP={prices['up_mid']:.4f}({prices['spread_up']:.4f}) "
-                      f"DOWN={prices['down_mid']:.4f}({prices['spread_down']:.4f}) "
-                      f"vol={vol_up:.6f}")
-
-                # ── 生成信号并执行 ──
-                signal = self.generate_signal(prices, current_market)
-                print(f"  信号: {signal['reason']}")
-
-                if signal['trade_up'] or signal['trade_down']:
-                    trades = self.execute_trades(current_market, prices, signal)
-                    for t in trades:
-                        print(f"  ✅ {t}")
-
-                # ── 统计 ──
-                stats = self.engine.get_statistics()
-                print(f"  累计: 订单={stats['total_orders']} 成交={stats['filled_orders']}")
-
-                await asyncio.sleep(self.check_interval)
+                await asyncio.sleep(self.poll_interval)
 
             except KeyboardInterrupt:
-                print("\n🛑 用户终止")
+                print("\n🛑 Interrupted by user")
                 break
-            except Exception as e:
-                log_error(f"主循环错误: {e}")
-                import traceback; traceback.print_exc()
+            except Exception as exc:
+                log_error(f"Main loop error: {exc}")
+                import traceback
+                traceback.print_exc()
                 await asyncio.sleep(10)
 
         self.db.close()
 
 
-async def main():
-    from lib.config import Config
-    config = Config()
-    bot = ContinuousGridTrader(dry_run=config.dry_run)
+async def main() -> None:
+    config = load_config()
+    bot = ContinuousBot(config)
     await bot.run()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
