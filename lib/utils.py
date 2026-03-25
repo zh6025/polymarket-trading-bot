@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import requests
 import zlib
 import gzip

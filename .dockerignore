@@ -1,0 +1,13 @@
+.git
+node_modules
+.env
+.env.*
+__pycache__/
+*.pyc
+*.db
+logs/
+.vscode/
+.idea/
+.DS_Store
+*.bak
+*.backup

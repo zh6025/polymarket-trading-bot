@@ -1,4 +1,4 @@
-﻿import sqlite3
+import sqlite3
 import json
 import logging
 from datetime import datetime, timedelta
@@ -103,12 +103,55 @@ class DataPersistence:
                 SELECT * FROM trades WHERE created_at > ?
                 ORDER BY created_at DESC
             """, (cutoff,))
-            
+
             columns = [description[0] for description in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"Failed to get trades: {e}")
             return []
+
+    def get_performance_summary(self, hours: int = 24) -> Dict[str, Any]:
+        """Return a summary of trading performance over the last N hours."""
+        trades = self.get_trades(hours=hours)
+        if not trades:
+            return {
+                "total_trades": 0,
+                "buy_trades": 0,
+                "sell_trades": 0,
+                "avg_price": 0.0,
+                "total_volume": 0.0,
+                "avg_pnl": 0.0,
+                "hours": hours,
+            }
+
+        buy_trades = [t for t in trades if t.get("side") == "buy"]
+        sell_trades = [t for t in trades if t.get("side") == "sell"]
+        prices = [float(t.get("price", 0)) for t in trades if t.get("price")]
+        sizes = [float(t.get("size", 0)) for t in trades if t.get("size")]
+
+        avg_price = sum(prices) / len(prices) if prices else 0.0
+        total_volume = sum(sizes)
+
+        # Estimate PnL: for each sell trade, compare vs avg buy price
+        avg_buy_price = (
+            sum(float(t.get("price", 0)) for t in buy_trades) / len(buy_trades)
+            if buy_trades else 0.0
+        )
+        avg_sell_price = (
+            sum(float(t.get("price", 0)) for t in sell_trades) / len(sell_trades)
+            if sell_trades else 0.0
+        )
+        avg_pnl = avg_sell_price - avg_buy_price if (buy_trades and sell_trades) else 0.0
+
+        return {
+            "total_trades": len(trades),
+            "buy_trades": len(buy_trades),
+            "sell_trades": len(sell_trades),
+            "avg_price": round(avg_price, 4),
+            "total_volume": round(total_volume, 4),
+            "avg_pnl": round(avg_pnl, 4),
+            "hours": hours,
+        }
     
     def close(self):
         """Close database connection"""
