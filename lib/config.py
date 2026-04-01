@@ -78,7 +78,7 @@ class Config:
     CONSECUTIVE_LOSS_LIMIT: int = _int('CONSECUTIVE_LOSS_LIMIT', 3)
 
     # ── Polling ──────────────────────────────────────────────────────────────
-    POLLING_INTERVAL: int = _int('POLLING_INTERVAL', 5000)  # milliseconds
+    POLLING_INTERVAL: int = min(_int('POLLING_INTERVAL', 5000), 5000)  # ms, max 5000
 
     # ── Logging ──────────────────────────────────────────────────────────────
     LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
