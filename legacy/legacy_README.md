@@ -10,14 +10,14 @@ It has been superseded by the new single-side multi-window BTC 5-minute strategy
 | `bot_continuous.py` | `bot_continuous.py` | Old continuous bot loop |
 | `bot_simulate.py` | `bot_simulate.py` | Old simulation runner |
 | `web_dashboard.py` | `web_dashboard.py` | Old web dashboard |
-| `lib_hedge_formula.py` | `lib/hedge_formula.py` | Hedge math formulas |
-| `lib_direction_scorer.py` | `lib/direction_scorer.py` | 9-dimension direction scorer |
-| `lib_trading_engine.py` | `lib/trading_engine.py` | Old order execution engine |
-| `lib_strategy.py` | `lib/strategy.py` | Old strategy module |
-| `lib_profit_strategy.py` | `lib/profit_strategy.py` | Old profit strategy |
-| `lib_risk.py` | `lib/risk.py` | Old risk utilities |
-| `lib_risk_manager.py` | `lib/risk_manager.py` | Old risk manager |
-| `lib_data_persistence.py` | `lib/data_persistence.py` | Old SQLite persistence |
+| `hedge_formula.py` | `lib/hedge_formula.py` | Hedge math formulas |
+| `direction_scorer.py` | `lib/direction_scorer.py` | 9-dimension direction scorer |
+| `trading_engine.py` | `lib/trading_engine.py` | Old order execution engine |
+| `strategy.py` | `lib/strategy.py` | Old strategy module |
+| `profit_strategy.py` | `lib/profit_strategy.py` | Old profit strategy |
+| `risk.py` | `lib/risk.py` | Old risk utilities |
+| `risk_manager.py` | `lib/risk_manager.py` | Old risk manager |
+| `data_persistence.py` | `lib/data_persistence.py` | Old SQLite persistence |
 | `test_hedge_formula.py` | `tests/test_hedge_formula.py` | Tests for hedge formula |
 | `test_direction_scorer.py` | `tests/test_direction_scorer.py` | Tests for direction scorer |
 
