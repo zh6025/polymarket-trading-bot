@@ -9,4 +9,8 @@ COPY . .
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "bot_continuous.py"]
+# Health check: verify the bot process is alive
+HEALTHCHECK --interval=60s --timeout=10s --retries=3 \
+  CMD pgrep -f "python bot_runner.py" || exit 1
+
+CMD ["python", "bot_runner.py"]

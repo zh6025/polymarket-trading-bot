@@ -1,20 +1,17 @@
-version: '3.8'
-
 services:
   polymarket-bot:
-    build: ..
+    build:
+      context: ..
+      dockerfile: Dockerfile
     container_name: polymarket-bot
     restart: unless-stopped
     env_file:
-      - .env.production
+      - ../.env
     volumes:
+      - ../bot_state.json:/app/bot_state.json
       - ../logs:/app/logs
-      - bot_state:/app/data
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "5"
-
-volumes:
-  bot_state:
