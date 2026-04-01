@@ -97,8 +97,8 @@ class MarketDataFetcher:
 
             if len(klines) >= 4:
                 # klines: [open_time, open, high, low, close, volume, ...]
-                snapshot.price_15m_ago = float(klines[0][4])  # close 3 candles ago
-                snapshot.price_5m_ago = float(klines[2][4])   # close 1 candle ago
+                snapshot.price_15m_ago = float(klines[0][4])  # close price from ~15m ago
+                snapshot.price_5m_ago = float(klines[2][4])   # close price from ~5m ago
                 latest = klines[3]
                 snapshot.open_5m = float(latest[1])
                 snapshot.high_5m = float(latest[2])

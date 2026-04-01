@@ -126,6 +126,7 @@ class PolymarketClient:
             log_error(f"Failed to place order: {e}")
             raise
 
+    def calculate_mid_price(self, book: Dict[str, Any]) -> Dict[str, float]:
         """Calculate bid/ask/mid from orderbook"""
         try:
             bids = book.get('bids', [])
