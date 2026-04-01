@@ -1,99 +1,109 @@
-# Polymarket BTC 5分钟交易机器人
+# Polymarket BTC 5-Minute Multi-Window Trading Bot
 
-自动交易 Polymarket BTC Up/Down 5分钟市场，集成9维度方向评分、精确对冲公式和全链路风控。
+Automated trading bot for Polymarket BTC Up/Down 5-minute markets. Uses real-time BTC momentum from Binance to build market bias and enters single-direction positions at precisely-timed windows before each market closes.
 
-## 架构
+## Architecture
 
 ```
-bot_runner.py          # 主入口：主循环 + 周期协调
+bot_runner.py              # Main loop: market detection → bias → window strategy → execution
 lib/
-  config.py            # 所有配置参数（环境变量驱动）
-  direction_scorer.py  # 9维度 BTC 方向评分（Binance API）
-  hedge_formula.py     # 精确对冲数学公式
-  decision.py          # 顺序门控交易决策层
-  bot_state.py         # 状态持久化 + crash recovery
-  polymarket_client.py # Polymarket CLOB API 客户端
-  data_persistence.py  # SQLite 数据存储
-  trading_engine.py    # 订单执行引擎
-tests/                 # 单元测试
-deploy/                # 部署脚本和配置
-docs/                  # 文档
+  config.py                # All configuration (environment-variable driven)
+  session_state.py         # Per-market session tracking (windows, open position)
+  market_data.py           # BTC snapshot (Binance) + Polymarket orderbook snapshots
+  market_bias.py           # UP / DOWN / NEUTRAL bias from BTC 5m & 15m momentum
+  window_strategy.py       # Multi-window decision logic (window 0/1/2 + mid-review)
+  execution.py             # Order execution layer (buy/sell, dry-run support)
+  bot_state.py             # Global state persistence + crash recovery
+  polymarket_client.py     # Polymarket CLOB API client
+  utils.py                 # Shared utilities
+tests/                     # Unit tests
+deploy/                    # Deployment scripts and configuration
+docs/                      # Additional documentation
+legacy/                    # Previous hedge-based strategy (archived)
 ```
 
-## 快速开始
+## Strategy Overview
+
+### No Hedge — Single Direction
+
+The bot takes a **single-direction position** aligned with BTC momentum. There is no dual-sided hedging.
+
+### Decision Windows (seconds remaining before market close)
+
+| Window | Seconds Remaining | Description |
+|--------|------------------|-------------|
+| Window 0 | 260–275s | Optional early momentum entry (disabled by default via `WINDOW0_ENABLED`) |
+| Mid-review | 115–125s | Stop-out Window 0 positions if direction has flipped |
+| Window 1 | 90–95s | **Primary entry point** |
+| Window 2 | 30–35s | Stop-loss exit or high-confidence late entry |
+
+### Market Bias
+
+Bias is computed from real-time BTC price data (Binance API):
+- **5-minute momentum** (default threshold: 0.15%)
+- **15-minute momentum** (default threshold: 0.30%)
+- Both timeframes must agree for a directional bias (configurable)
+- Falls back to `NEUTRAL` on disagreement or missing data
+
+### Hard Filters
+
+- **Hard cap price**: Never buy if token price > `HARD_CAP_PRICE` (default 0.85)
+- **Volatility safety**: Skip if recent 10s BTC price swing > `MAX_RECENT_VOLATILITY` (default 20%)
+- **Spread check**: Skip if orderbook spread > `MAX_SPREAD`
+- **Depth check**: Skip if combined bid+ask depth < `MIN_DEPTH`
+- **Data delay check**: Skip if BTC data is stale (> 30s old)
+
+## Quick Start
 
 ```bash
-# 安装依赖
+# Install dependencies
 pip install -r requirements.txt
 
-# 配置环境变量
+# Configure environment variables
 cp .env.example .env
-# 编辑 .env，填入 API_KEY
+# Edit .env — at minimum set API_KEY
 
-# 模拟运行（默认模式，不会下真实订单）
+# Run in dry-run / observation mode (default — no real orders)
 python bot_runner.py
 
-# 运行测试
-pip install pytest
-pytest tests/
+# Run tests
+pytest tests/ -v
 ```
 
-## 配置说明
+## Configuration
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `TRADING_ENABLED` | `false` | ⚠️ 必须显式设为 true 才能真实交易 |
-| `DRY_RUN` | `true` | 模拟模式（不提交订单） |
-| `STRATEGY` | `imbalance` | 策略类型 |
-| `SCORER_ENABLED` | `true` | 启用9维度评分器 |
-| `BET_SIZE_USDC` | `3.0` | 每次主仓下注金额（USDC） |
-| `DAILY_LOSS_LIMIT_USDC` | `20` | 每日最大亏损触发熔断 |
-| `DAILY_TRADE_LIMIT` | `20` | 每日最大交易次数 |
-| `CONSECUTIVE_LOSS_LIMIT` | `3` | 连续亏损上限 |
-| `MAIN_PRICE_MIN` | `0.50` | 主仓价格窗口下限 |
-| `MAIN_PRICE_MAX` | `0.65` | 主仓价格窗口上限 |
-| `HEDGE_PRICE_MIN` | `0.05` | 对冲价格窗口下限 |
-| `HEDGE_PRICE_MAX` | `0.15` | 对冲价格窗口上限 |
-| `HEDGE_FIRST` | `true` | 先挂对冲单，确认后再下主仓 |
-| `FEE_RATE` | `0.02` | Polymarket 手续费（2%） |
-| `HARD_STOP_SEC` | `30` | 到期前N秒硬停不入场 |
-| `POLLING_INTERVAL` | `60000` | 轮询间隔（毫秒） |
+All settings are driven by environment variables. See `.env.example` for the full list.
 
-## 策略说明
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRADING_ENABLED` | `false` | ⚠️ Must be `true` to place real orders |
+| `DRY_RUN` | `true` | Simulate orders without submitting |
+| `WINDOW0_ENABLED` | `false` | Enable early momentum window (experimental) |
+| `HARD_CAP_PRICE` | `0.85` | Never buy above this price |
+| `MIN_CONFIDENCE_W0` | `0.70` | Minimum price for Window 0 entry |
+| `MIN_CONFIDENCE_W1` | `0.55` | Minimum price for Window 1 entry |
+| `LATE_ENTRY_MIN_PRICE` | `0.65` | Minimum price for Window 2 late entry |
+| `MAX_SPREAD` | `0.05` | Maximum allowable spread |
+| `MIN_DEPTH` | `50.0` | Minimum combined orderbook depth (USDC) |
+| `MOMENTUM_5M_THRESHOLD` | `0.0015` | 5m BTC move threshold for directional bias |
+| `MOMENTUM_15M_THRESHOLD` | `0.003` | 15m BTC move threshold for trend |
+| `MAX_RECENT_VOLATILITY` | `0.20` | Max 10s price swing before skipping |
+| `BET_SIZE_USDC` | `3.0` | Size per trade in USDC |
+| `DAILY_LOSS_LIMIT_USDC` | `20.0` | Daily loss circuit-breaker |
+| `DAILY_TRADE_LIMIT` | `20` | Max trades per day |
+| `CONSECUTIVE_LOSS_LIMIT` | `3` | Stop after N consecutive losses |
+| `POLLING_INTERVAL` | `5000` | Main loop interval (milliseconds) |
 
-### 执行顺序（重要）
-1. 先挂对冲单（`HEDGE_FIRST=true`）
-2. 等待对冲单成交确认
-3. 再下主仓
+## Risk Controls
 
-### 9维度方向评分
-从 Binance 公开 API 实时获取数据，计算加权评分：
-- EMA交叉（权重 0.15）
-- RSI趋势（0.10）
-- VWAP位置（0.12）
-- 成交量突增（0.13）
-- **CVD累积量差（0.18，最重要）**
-- 盘口深度比（0.15）
-- 资金费率（0.07）
-- 持仓量变化（0.05）
-- 宏观动量（0.05）
+- **Safety switch**: `TRADING_ENABLED=false` (default) — bot observes but never orders
+- **Dry-run mode**: `DRY_RUN=true` (default) — orders are simulated and logged
+- **Daily circuit-breaker**: halts trading when daily loss exceeds `DAILY_LOSS_LIMIT_USDC`
+- **Consecutive loss protection**: stops after `CONSECUTIVE_LOSS_LIMIT` consecutive losses
+- **Crash recovery**: `bot_state.json` written atomically; state restored on restart
+- **UTC daily reset**: counters reset automatically at UTC midnight
 
-### 对冲公式
-```
-最小对冲量: Q_h = (P_m × Q_m) / [(1 - P_h) × (1 - fee)]
-可行条件:   (1-P_m)(1-P_h)(1-fee)² > P_m × P_h
-主仓盈利:   π₁ = Q_m(1-P_m)(1-fee) - P_h × Q_h
-```
-
-## 风控
-
-- **安全开关**：`TRADING_ENABLED=false`（默认）
-- **每日熔断**：亏损超 `DAILY_LOSS_LIMIT_USDC` 自动停止
-- **连续亏损保护**：连续亏损 N 次停止
-- **Crash Recovery**：`bot_state.json` 原子写入，重启自动恢复
-- **UTC日切**：每日0时自动重置计数器
-
-## Docker 部署
+## Docker Deployment
 
 ```bash
 docker build -t polymarket-bot .
@@ -103,4 +113,8 @@ docker run -d --name polymarket-bot \
   polymarket-bot
 ```
 
-详见 [deploy/DEPLOYMENT_GUIDE.md](deploy/DEPLOYMENT_GUIDE.md)
+See [deploy/DEPLOYMENT_GUIDE.md](deploy/DEPLOYMENT_GUIDE.md) for full deployment instructions.
+
+## Legacy Code
+
+The previous hedge-based strategy has been moved to the [`legacy/`](legacy/) directory for reference.

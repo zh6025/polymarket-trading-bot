@@ -1,75 +1,82 @@
-﻿import os
+"""
+Config: Configuration for the BTC 5m multi-window trading bot.
+All settings loaded from environment variables with safe defaults.
+"""
+import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _bool(key: str, default: bool) -> bool:
+    val = os.getenv(key, "").strip().lower()
+    if val in ('true', '1', 'yes'):
+        return True
+    if val in ('false', '0', 'no'):
+        return False
+    return default
+
+
+def _float(key: str, default: float) -> float:
+    try:
+        return float(os.getenv(key, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+
+def _int(key: str, default: int) -> int:
+    try:
+        return int(os.getenv(key, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+
 class Config:
-    def __init__(self):
-        self.api_key = self.get_env_variable('API_KEY', required=False, default='demo-key')
-        self.series_slug = self.get_env_variable('SERIES_SLUG', required=False, default='btc-up-or-down-5m')
-        self.levels_each_side = int(self.get_env_variable('LEVELS_EACH_SIDE', required=False, default='5'))
-        self.grid_step = float(self.get_env_variable('GRID_STEP', required=False, default='0.02'))
-        self.order_size = float(self.get_env_variable('ORDER_SIZE', required=False, default='5'))
-        self.trade_both_outcomes = self.get_env_variable('TRADE_BOTH_OUTCOMES', required=False, default='true').lower() == 'true'
-        self.daily_loss_limit = float(self.get_env_variable('DAILY_LOSS_LIMIT', required=False, default='1000'))
-        self.max_position_size = float(self.get_env_variable('MAX_POSITION_SIZE', required=False, default='5000'))
-        self.dry_run = self.get_env_variable('DRY_RUN', required=False, default='true').lower() == 'true'
-        self.polling_interval = int(self.get_env_variable('POLLING_INTERVAL', required=False, default='60000'))
+    # ── Safety ──────────────────────────────────────────────────────────────
+    TRADING_ENABLED: bool = _bool('TRADING_ENABLED', False)
+    DRY_RUN: bool = _bool('DRY_RUN', True)
 
-        # 策略选择
-        self.strategy = self.get_env_variable('STRATEGY', required=False, default='imbalance')
+    # ── Polymarket API ───────────────────────────────────────────────────────
+    API_KEY: str = os.getenv('API_KEY', '')
+    API_SECRET: str = os.getenv('API_SECRET', '')
+    API_PASSPHRASE: str = os.getenv('API_PASSPHRASE', '')
 
-        # 安全开关：必须显式设为 true 才能真实交易
-        self.trading_enabled = self.get_env_variable('TRADING_ENABLED', required=False, default='false').lower() == 'true'
+    # ── Strategy: Window feature flags ──────────────────────────────────────
+    # Window 0 is disabled by default (early momentum, experimental)
+    WINDOW0_ENABLED: bool = _bool('WINDOW0_ENABLED', False)
 
-        # 方向评分器配置
-        self.scorer_enabled = self.get_env_variable('SCORER_ENABLED', required=False, default='true').lower() == 'true'
-        self.scorer_steepness = float(self.get_env_variable('SCORER_STEEPNESS', required=False, default='3.0'))
-        self.scorer_buy_threshold = float(self.get_env_variable('SCORER_BUY_THRESHOLD', required=False, default='0.58'))
-        self.scorer_sell_threshold = float(self.get_env_variable('SCORER_SELL_THRESHOLD', required=False, default='0.42'))
-        self.min_confidence = float(self.get_env_variable('MIN_CONFIDENCE', required=False, default='0.15'))
+    # ── Strategy: Price thresholds ───────────────────────────────────────────
+    # Hard cap: never buy if market price is above this
+    HARD_CAP_PRICE: float = _float('HARD_CAP_PRICE', 0.85)
+    # Minimum price (confidence) to enter in window 0 (stricter)
+    MIN_CONFIDENCE_W0: float = _float('MIN_CONFIDENCE_W0', 0.70)
+    # Minimum price (confidence) to enter in window 1
+    MIN_CONFIDENCE_W1: float = _float('MIN_CONFIDENCE_W1', 0.55)
+    # Minimum price for late entry (window 2 only)
+    LATE_ENTRY_MIN_PRICE: float = _float('LATE_ENTRY_MIN_PRICE', 0.65)
 
-        # 价格窗口配置
-        self.main_price_min = float(self.get_env_variable('MAIN_PRICE_MIN', required=False, default='0.50'))
-        self.main_price_max = float(self.get_env_variable('MAIN_PRICE_MAX', required=False, default='0.65'))
-        self.hedge_price_min = float(self.get_env_variable('HEDGE_PRICE_MIN', required=False, default='0.05'))
-        self.hedge_price_max = float(self.get_env_variable('HEDGE_PRICE_MAX', required=False, default='0.15'))
+    # ── Strategy: Market quality filters ────────────────────────────────────
+    MAX_SPREAD: float = _float('MAX_SPREAD', 0.05)
+    MIN_DEPTH: float = _float('MIN_DEPTH', 50.0)
 
-        # 对冲配置
-        self.hedge_first = self.get_env_variable('HEDGE_FIRST', required=False, default='true').lower() == 'true'
-        self.fee_rate = float(self.get_env_variable('FEE_RATE', required=False, default='0.02'))
+    # ── Strategy: Bias computation ───────────────────────────────────────────
+    MOMENTUM_5M_THRESHOLD: float = _float('MOMENTUM_5M_THRESHOLD', 0.0015)
+    MOMENTUM_15M_THRESHOLD: float = _float('MOMENTUM_15M_THRESHOLD', 0.003)
 
-        # 风控配置
-        self.daily_loss_limit_usdc = float(self.get_env_variable('DAILY_LOSS_LIMIT_USDC', required=False, default='20'))
-        self.daily_trade_limit = int(self.get_env_variable('DAILY_TRADE_LIMIT', required=False, default='20'))
-        self.consecutive_loss_limit = int(self.get_env_variable('CONSECUTIVE_LOSS_LIMIT', required=False, default='3'))
+    # ── Strategy: Volatility safety ──────────────────────────────────────────
+    # If recent 10s price change exceeds this fraction, skip (too volatile)
+    MAX_RECENT_VOLATILITY: float = _float('MAX_RECENT_VOLATILITY', 0.20)
 
-        # 时间窗口配置（秒）
-        self.hard_stop_sec = int(self.get_env_variable('HARD_STOP_SEC', required=False, default='30'))
-        self.min_secs_main = int(self.get_env_variable('MIN_SECS_MAIN', required=False, default='90'))
-        self.min_secs_hedge = int(self.get_env_variable('MIN_SECS_HEDGE', required=False, default='60'))
+    # ── Bet sizing ───────────────────────────────────────────────────────────
+    BET_SIZE_USDC: float = _float('BET_SIZE_USDC', 3.0)
 
-        # 市场质量配置
-        self.max_spread = float(self.get_env_variable('MAX_SPREAD', required=False, default='0.05'))
-        self.min_depth = float(self.get_env_variable('MIN_DEPTH', required=False, default='50'))
+    # ── Risk controls ────────────────────────────────────────────────────────
+    DAILY_LOSS_LIMIT_USDC: float = _float('DAILY_LOSS_LIMIT_USDC', 20.0)
+    DAILY_TRADE_LIMIT: int = _int('DAILY_TRADE_LIMIT', 20)
+    CONSECUTIVE_LOSS_LIMIT: int = _int('CONSECUTIVE_LOSS_LIMIT', 3)
 
-        # 下注规模（USDC）
-        self.bet_size_usdc = float(self.get_env_variable('BET_SIZE_USDC', required=False, default='3.0'))
+    # ── Polling ──────────────────────────────────────────────────────────────
+    POLLING_INTERVAL: int = _int('POLLING_INTERVAL', 5000)  # milliseconds
 
-    def get_env_variable(self, var_name, required=False, default=None):
-        value = os.getenv(var_name)
-        if value is None:
-            if required:
-                raise ValueError(f'Environment variable {var_name} is required.')
-            return default
-        return value
-
-    def to_dict(self):
-        return {
-            'series_slug': self.series_slug,
-            'levels_each_side': self.levels_each_side,
-            'grid_step': self.grid_step,
-            'order_size': self.order_size,
-            'trade_both_outcomes': self.trade_both_outcomes,
-            'dry_run': self.dry_run,
-        }
+    # ── Logging ──────────────────────────────────────────────────────────────
+    LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')

@@ -97,7 +97,35 @@ class PolymarketClient:
         log_error("未找到任何活跃的BTC 5分钟市场")
         return None
 
-    def calculate_mid_price(self, book: Dict[str, Any]) -> Dict[str, float]:
+    def place_order(self, token_id: str, side: str, price: float, size: float) -> dict:
+        """
+        Place a limit order on Polymarket CLOB.
+
+        Args:
+            token_id: The Polymarket token ID to trade
+            side: 'BUY' or 'SELL'
+            price: Limit price (0.0 - 1.0)
+            size: Order size in USDC
+
+        Returns:
+            API response dict containing order ID and status
+        """
+        payload = {
+            "tokenID": token_id,
+            "side": side.upper(),
+            "price": round(price, 4),
+            "size": round(size, 2),
+            "orderType": "GTC",
+        }
+        try:
+            url = f"{self.BASE_URL}/order"
+            log_info(f"Placing {side.upper()} order: token={token_id[:8]}... price={price:.4f} size={size:.2f}")
+            response = self.client.post(url, payload)
+            return response
+        except Exception as e:
+            log_error(f"Failed to place order: {e}")
+            raise
+
         """Calculate bid/ask/mid from orderbook"""
         try:
             bids = book.get('bids', [])

@@ -1,5 +1,5 @@
 """
-Tests for lib/decision.py
+Tests for lib/decision.py (simplified stub for new single-side architecture)
 """
 import pytest
 from lib.decision import make_trade_decision
@@ -26,7 +26,7 @@ class TestHardStop:
             hard_stop_sec=30,
         )
         assert result['action'] == 'SKIP'
-        assert '硬停' in result['reason']
+        assert 'hard_stop' in result['reason']
 
     def test_above_hard_stop_proceeds(self):
         result = make_trade_decision(
@@ -39,7 +39,7 @@ class TestHardStop:
             hard_stop_sec=30,
             min_secs_main=90,
         )
-        assert result['action'] != 'SKIP' or '硬停' not in result['reason']
+        assert result['action'] != 'SKIP' or 'hard_stop' not in result['reason']
 
 
 class TestMinTimeGate:
@@ -55,7 +55,7 @@ class TestMinTimeGate:
             min_secs_main=90,
         )
         assert result['action'] == 'SKIP'
-        assert '时间不足' in result['reason']
+        assert 'insufficient_time' in result['reason']
 
 
 class TestSignalGate:
@@ -69,7 +69,7 @@ class TestSignalGate:
             scorer_result=make_scorer_result(direction='SKIP', prob_up=0.5),
         )
         assert result['action'] == 'SKIP'
-        assert '信号不足' in result['reason']
+        assert 'no_signal' in result['reason']
 
     def test_low_confidence_skips(self):
         result = make_trade_decision(
@@ -82,7 +82,7 @@ class TestSignalGate:
             min_confidence=0.15,
         )
         assert result['action'] == 'SKIP'
-        assert '置信度' in result['reason']
+        assert 'low_confidence' in result['reason']
 
 
 class TestPriceWindowGate:
@@ -98,7 +98,7 @@ class TestPriceWindowGate:
             main_price_max=0.65,
         )
         assert result['action'] == 'SKIP'
-        assert '主仓价格' in result['reason']
+        assert 'price_out_of_window' in result['reason']
 
     def test_main_price_in_window_proceeds(self):
         result = make_trade_decision(
@@ -126,7 +126,7 @@ class TestSpreadGate:
             max_spread=0.05,
         )
         assert result['action'] == 'SKIP'
-        assert 'Spread' in result['reason']
+        assert 'spread_too_wide' in result['reason']
 
 
 class TestDepthGate:
@@ -141,33 +141,15 @@ class TestDepthGate:
             min_depth=50,
         )
         assert result['action'] == 'SKIP'
-        assert '深度不足' in result['reason']
+        assert 'depth_insufficient' in result['reason']
 
 
-class TestHedgeFeasibility:
-    def test_hedge_price_in_window_produces_hedge_action(self):
-        result = make_trade_decision(
-            remaining_seconds=200,
-            up_price=0.55,
-            down_price=0.08,  # in hedge window [0.05, 0.15]
-            spread=0.02,
-            depth=100,
-            scorer_result=make_scorer_result(direction='BUY_YES', prob_up=0.65),
-            main_price_min=0.50,
-            main_price_max=0.65,
-            hedge_price_min=0.05,
-            hedge_price_max=0.15,
-            min_secs_hedge=60,
-        )
-        assert result['action'] == 'ENTER_MAIN_AND_HEDGE'
-        assert result['hedge_price'] == 0.08
-        assert result['direction'] == 'UP'
-
+class TestEntryDirection:
     def test_hedge_price_out_of_window_produces_main_only(self):
         result = make_trade_decision(
             remaining_seconds=200,
             up_price=0.55,
-            down_price=0.40,  # outside hedge window [0.05, 0.15]
+            down_price=0.40,  # not in hedge window
             spread=0.02,
             depth=100,
             scorer_result=make_scorer_result(direction='BUY_YES', prob_up=0.65),
@@ -179,11 +161,11 @@ class TestHedgeFeasibility:
         assert result['action'] == 'ENTER_MAIN_ONLY'
 
     def test_buy_no_direction(self):
-        """BUY_NO should set direction=DOWN and swap prices."""
+        """BUY_NO should set direction=DOWN and use down_price as main."""
         result = make_trade_decision(
             remaining_seconds=200,
-            up_price=0.08,    # hedge price for DOWN direction
-            down_price=0.55,  # main price for DOWN direction
+            up_price=0.08,
+            down_price=0.55,
             spread=0.02,
             depth=100,
             scorer_result=make_scorer_result(direction='BUY_NO', prob_up=0.30),
