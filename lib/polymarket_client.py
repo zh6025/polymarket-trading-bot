@@ -126,6 +126,65 @@ class PolymarketClient:
             log_error(f"Failed to place order: {e}")
             raise
 
+    def get_user_positions(self) -> List[Dict[str, Any]]:
+        """获取用户当前所有仓位 (Get user's current positions)"""
+        try:
+            url = f"{self.BASE_URL}/positions"
+            log_info("Fetching user positions for auto-redeem check")
+            response = self.client.get(url)
+            positions = response if isinstance(response, list) else response.get('data', [])
+            return positions
+        except Exception as e:
+            log_error(f"Failed to fetch positions: {e}")
+            return []
+
+    def redeem_position(self, condition_id: str) -> Optional[Dict[str, Any]]:
+        """赎回已结算仓位，回收USDC (Redeem resolved position to recover USDC)"""
+        try:
+            url = f"{self.BASE_URL}/redeem"
+            payload = {"conditionID": condition_id}
+            log_info(f"Redeeming resolved position: condition={condition_id[:16]}...")
+            response = self.client.post(url, payload)
+            log_info(f"Redemption successful: {condition_id[:16]}...")
+            return response
+        except Exception as e:
+            log_error(f"Failed to redeem position {condition_id[:16]}...: {e}")
+            return None
+
+    def auto_redeem_resolved(self) -> int:
+        """自动赎回所有已结算仓位 (Auto-redeem all resolved positions)
+
+        Returns:
+            Number of positions successfully redeemed
+        """
+        redeemed = 0
+        try:
+            positions = self.get_user_positions()
+            for pos in positions:
+                # Check if position is in a resolved market and has redeemable balance
+                outcome = pos.get('outcome', '')
+                size = float(pos.get('size', 0))
+                condition_id = pos.get('conditionId', '') or pos.get('condition_id', '')
+                market_status = pos.get('marketStatus', '') or pos.get('market_status', '')
+                redeemable = pos.get('redeemable', False)
+
+                if not condition_id or size <= 0:
+                    continue
+
+                # Redeem if market is resolved/settled and position is redeemable
+                if market_status in ('resolved', 'settled', 'closed') or redeemable:
+                    result = self.redeem_position(condition_id)
+                    if result is not None:
+                        redeemed += 1
+                        log_info(f"💰 Redeemed: condition={condition_id[:16]}... "
+                                 f"outcome={outcome} size={size}")
+        except Exception as e:
+            log_error(f"Auto-redeem error: {e}")
+
+        if redeemed > 0:
+            log_info(f"✅ Auto-redeemed {redeemed} resolved position(s)")
+        return redeemed
+
     def calculate_mid_price(self, book: Dict[str, Any]) -> Dict[str, float]:
         """Calculate bid/ask/mid from orderbook"""
         try:

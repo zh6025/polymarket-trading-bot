@@ -82,7 +82,7 @@ class TestWindow0:
                                    window0_enabled=True, min_confidence=0.70)
         assert result.action == 'ENTER'
         assert result.direction == 'UP'
-        assert result.size == pytest.approx(1.5)  # 50% of 3.0
+        assert result.size == pytest.approx(3.0)  # uses configured bet_size directly
 
     def test_outside_window_skips(self):
         s = make_session()

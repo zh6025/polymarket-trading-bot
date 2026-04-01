@@ -87,12 +87,12 @@ def evaluate_window0(
     if (ob.bid_depth + ob.ask_depth) < min_depth:
         return _no_action("window0_depth_insufficient", 0)
 
-    # Window 0 uses smaller size (50% of normal)
+    # Window 0 uses its own configured bet size
     return WindowDecision(
         action='ENTER',
         direction=direction,
         price=ob.price,
-        size=bet_size * 0.5,
+        size=bet_size,
         token_id=ob.token_id,
         reason=f"window0_entry bias={bias.value}",
         window=0,
@@ -260,7 +260,7 @@ def run_window_strategy(
     bias: Bias,
     ob_up: Optional[OrderbookSnapshot],
     ob_down: Optional[OrderbookSnapshot],
-    bet_size: float,
+    bet_size: float = 3.0,
     hard_cap_price: float = 0.85,
     window0_enabled: bool = False,
     min_confidence_w0: float = 0.70,
@@ -270,6 +270,9 @@ def run_window_strategy(
     min_depth: float = 50.0,
     recent_volatility: Optional[float] = None,
     max_recent_volatility: float = 0.20,
+    bet_size_w0: Optional[float] = None,
+    bet_size_w1: Optional[float] = None,
+    bet_size_w2: Optional[float] = None,
 ) -> WindowDecision:
     """
     Main entry point: evaluate all windows in order and return first applicable action.
@@ -280,12 +283,19 @@ def run_window_strategy(
         bias: Current market bias
         ob_up: Orderbook snapshot for UP token
         ob_down: Orderbook snapshot for DOWN token
-        bet_size: Bet size in USDC
+        bet_size: Default bet size in USDC (used when per-window sizes not provided)
         hard_cap_price: Never buy above this price
         window0_enabled: Feature flag for window 0
         recent_volatility: Recent price change fraction (for safety check)
         max_recent_volatility: If recent volatility exceeds this, skip
+        bet_size_w0: Bet size for window 0 (overrides bet_size)
+        bet_size_w1: Bet size for window 1 (overrides bet_size)
+        bet_size_w2: Bet size for window 2 (overrides bet_size)
     """
+    # Resolve per-window sizes (fall back to default bet_size)
+    size_w0 = bet_size_w0 if bet_size_w0 is not None else bet_size
+    size_w1 = bet_size_w1 if bet_size_w1 is not None else bet_size
+    size_w2 = bet_size_w2 if bet_size_w2 is not None else bet_size
     if recent_volatility is not None and recent_volatility > max_recent_volatility:
         log.warning(f"Volatility filter triggered: {recent_volatility:.3f} > {max_recent_volatility}")
         return _no_action(f"volatility_filter {recent_volatility:.3f}", WINDOW_NONE)
@@ -294,7 +304,7 @@ def run_window_strategy(
     if not session.window0_processed and WINDOW0_END <= secs_remaining <= WINDOW0_START:
         result = evaluate_window0(
             session=session, secs_remaining=secs_remaining, bias=bias,
-            ob_up=ob_up, ob_down=ob_down, bet_size=bet_size,
+            ob_up=ob_up, ob_down=ob_down, bet_size=size_w0,
             hard_cap_price=hard_cap_price, min_confidence=min_confidence_w0,
             max_spread=max_spread, min_depth=min_depth, window0_enabled=window0_enabled,
         )
@@ -316,7 +326,7 @@ def run_window_strategy(
     if not session.window1_processed and WINDOW1_END <= secs_remaining <= WINDOW1_START:
         result = evaluate_window1(
             session=session, secs_remaining=secs_remaining, bias=bias,
-            ob_up=ob_up, ob_down=ob_down, bet_size=bet_size,
+            ob_up=ob_up, ob_down=ob_down, bet_size=size_w1,
             hard_cap_price=hard_cap_price, min_confidence=min_confidence_w1,
             max_spread=max_spread, min_depth=min_depth,
         )
@@ -328,7 +338,7 @@ def run_window_strategy(
     if not session.window2_processed and WINDOW2_END <= secs_remaining <= WINDOW2_START:
         result = evaluate_window2(
             session=session, secs_remaining=secs_remaining, bias=bias,
-            ob_up=ob_up, ob_down=ob_down, bet_size=bet_size,
+            ob_up=ob_up, ob_down=ob_down, bet_size=size_w2,
             hard_cap_price=hard_cap_price, late_entry_min_price=late_entry_min_price,
             max_spread=max_spread, min_depth=min_depth,
         )

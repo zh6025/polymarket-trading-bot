@@ -76,6 +76,13 @@ def run_trading_cycle(
     Run one polling cycle of the trading bot.
     Returns True if we should continue, False if trading is blocked.
     """
+    # 0. Auto-redeem resolved positions to recover USDC
+    if config.AUTO_REDEEM and not config.DRY_RUN:
+        try:
+            client.auto_redeem_resolved()
+        except Exception as e:
+            log.warning(f"Auto-redeem failed (non-fatal): {e}")
+
     # 1. Check global risk limits
     can_trade, reason = bot_state.can_trade(
         daily_loss_limit=config.DAILY_LOSS_LIMIT_USDC,
@@ -151,7 +158,6 @@ def run_trading_cycle(
         bias=bias,
         ob_up=ob_up,
         ob_down=ob_down,
-        bet_size=config.BET_SIZE_USDC,
         hard_cap_price=config.HARD_CAP_PRICE,
         window0_enabled=config.WINDOW0_ENABLED,
         min_confidence_w0=config.MIN_CONFIDENCE_W0,
@@ -161,6 +167,9 @@ def run_trading_cycle(
         min_depth=config.MIN_DEPTH,
         recent_volatility=recent_volatility,
         max_recent_volatility=config.MAX_RECENT_VOLATILITY,
+        bet_size_w0=config.BET_SIZE_W0,
+        bet_size_w1=config.BET_SIZE_W1,
+        bet_size_w2=config.BET_SIZE_W2,
     )
 
     log.info(f"Decision: {decision.action} | window={decision.window} | {decision.reason}")
@@ -208,13 +217,16 @@ def main():
     config = Config()
     log.info(
         f"Config: DRY_RUN={config.DRY_RUN} TRADING_ENABLED={config.TRADING_ENABLED} "
-        f"BET_SIZE={config.BET_SIZE_USDC} WINDOW0={config.WINDOW0_ENABLED}"
+        f"BET_SIZE W0={config.BET_SIZE_W0} W1={config.BET_SIZE_W1} W2={config.BET_SIZE_W2} "
+        f"WINDOW0={config.WINDOW0_ENABLED} AUTO_REDEEM={config.AUTO_REDEEM}"
     )
 
     if not config.TRADING_ENABLED:
-        log.warning("⚠️  TRADING_ENABLED=false — running in observation mode (no orders placed)")
+        log.warning("⚠️  TRADING_ENABLED=false — 观察模式，不会下任何订单 (observation mode)")
     if config.DRY_RUN:
-        log.info("🔬 DRY_RUN=true — all orders simulated")
+        log.info("🔬 DRY_RUN=true — 模拟交易，不会发送真实订单 (simulated, no real orders)")
+    if not config.DRY_RUN and config.TRADING_ENABLED:
+        log.warning("🔴 真实交易模式！TRADING_ENABLED=true, DRY_RUN=false — LIVE TRADING!")
 
     bot_state = BotState.load()
     bot_state.trading_enabled = config.TRADING_ENABLED

@@ -33,7 +33,11 @@ def _int(key: str, default: int) -> int:
 
 class Config:
     # ── Safety ──────────────────────────────────────────────────────────────
+    # TRADING_ENABLED=true  → 允许交易 (allow trading)
+    # TRADING_ENABLED=false → 观察模式，不下单 (observation only, no orders)
     TRADING_ENABLED: bool = _bool('TRADING_ENABLED', False)
+    # DRY_RUN=true  → 模拟交易，不发真实订单 (simulated, no real orders)
+    # DRY_RUN=false → 真实交易，发真实订单 (real trading, real orders)
     DRY_RUN: bool = _bool('DRY_RUN', True)
 
     # ── Polymarket API ───────────────────────────────────────────────────────
@@ -69,8 +73,11 @@ class Config:
     # Maximum age of BTC data before it is considered stale (seconds)
     BTC_DATA_MAX_AGE_SEC: float = _float('BTC_DATA_MAX_AGE_SEC', 30.0)
 
-    # ── Bet sizing ───────────────────────────────────────────────────────────
-    BET_SIZE_USDC: float = _float('BET_SIZE_USDC', 3.0)
+    # ── Bet sizing (per-window) ───────────────────────────────────────────
+    # 每个窗口独立下注金额 (USDC)
+    BET_SIZE_W0: float = _float('BET_SIZE_W0', 3.0)   # Window 0: 早期动量
+    BET_SIZE_W1: float = _float('BET_SIZE_W1', 5.0)   # Window 1: 主入场
+    BET_SIZE_W2: float = _float('BET_SIZE_W2', 3.0)   # Window 2: 晚期入场
 
     # ── Risk controls ────────────────────────────────────────────────────────
     DAILY_LOSS_LIMIT_USDC: float = _float('DAILY_LOSS_LIMIT_USDC', 20.0)
@@ -79,6 +86,10 @@ class Config:
 
     # ── Polling ──────────────────────────────────────────────────────────────
     POLLING_INTERVAL: int = min(_int('POLLING_INTERVAL', 5000), 5000)  # ms, max 5000
+
+    # ── Auto-redeem ─────────────────────────────────────────────────────────
+    # 自动赎回已结算仓位，回收USDC (auto-redeem resolved positions)
+    AUTO_REDEEM: bool = _bool('AUTO_REDEEM', True)
 
     # ── Logging ──────────────────────────────────────────────────────────────
     LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
