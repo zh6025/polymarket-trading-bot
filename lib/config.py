@@ -66,6 +66,8 @@ class Config:
     # ── Strategy: Volatility safety ──────────────────────────────────────────
     # If recent 10s price change exceeds this fraction, skip (too volatile)
     MAX_RECENT_VOLATILITY: float = _float('MAX_RECENT_VOLATILITY', 0.20)
+    # Maximum age of BTC data before it is considered stale (seconds)
+    BTC_DATA_MAX_AGE_SEC: float = _float('BTC_DATA_MAX_AGE_SEC', 30.0)
 
     # ── Bet sizing ───────────────────────────────────────────────────────────
     BET_SIZE_USDC: float = _float('BET_SIZE_USDC', 3.0)

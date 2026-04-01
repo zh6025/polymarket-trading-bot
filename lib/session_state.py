@@ -50,7 +50,11 @@ class SessionState:
         self.trade_pnl = 0.0
 
     def seconds_remaining(self, now: Optional[float] = None) -> float:
-        """Seconds remaining until market close"""
+        """Seconds remaining until market close.
+        
+        Args:
+            now: Current unix timestamp. Defaults to time.time(). Inject for testing.
+        """
         if now is None:
             now = time.time()
         return max(0.0, self.market_end_time - now)

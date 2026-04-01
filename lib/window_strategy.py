@@ -26,6 +26,9 @@ WINDOW1_END = 90
 WINDOW2_START = 35
 WINDOW2_END = 30
 
+# Sentinel value for "no active window" in WindowDecision.window
+WINDOW_NONE = -99
+
 
 @dataclass
 class WindowDecision:
@@ -38,7 +41,7 @@ class WindowDecision:
     window: int       # 0, 1, 2, -1 (mid-review), or -99 (no window)
 
 
-def _no_action(reason: str, window: int) -> WindowDecision:
+def _no_action(reason: str, window: int = WINDOW_NONE) -> WindowDecision:
     return WindowDecision(action='SKIP', direction='', price=0.0, size=0.0,
                           token_id='', reason=reason, window=window)
 
@@ -285,7 +288,7 @@ def run_window_strategy(
     """
     if recent_volatility is not None and recent_volatility > max_recent_volatility:
         log.warning(f"Volatility filter triggered: {recent_volatility:.3f} > {max_recent_volatility}")
-        return _no_action(f"volatility_filter {recent_volatility:.3f}", -99)
+        return _no_action(f"volatility_filter {recent_volatility:.3f}", WINDOW_NONE)
 
     # Window 0
     if not session.window0_processed and WINDOW0_END <= secs_remaining <= WINDOW0_START:
@@ -333,4 +336,4 @@ def run_window_strategy(
         if result.action != 'SKIP':
             return result
 
-    return _no_action("no_active_window", -99)
+    return _no_action("no_active_window", WINDOW_NONE)

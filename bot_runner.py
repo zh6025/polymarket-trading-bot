@@ -124,7 +124,7 @@ def run_trading_cycle(
     btc_snap = data_fetcher.get_btc_snapshot()
 
     # Data delay safety check
-    if btc_snap and (now - btc_snap.timestamp) > 30:
+    if btc_snap and (now - btc_snap.timestamp) > config.BTC_DATA_MAX_AGE_SEC:
         log.warning(f"BTC data is stale ({now - btc_snap.timestamp:.0f}s old), skipping")
         return True
 

@@ -96,9 +96,11 @@ class MarketDataFetcher:
             snapshot = BtcSnapshot(timestamp=now, price=current_price)
 
             if len(klines) >= 4:
-                # klines: [open_time, open, high, low, close, volume, ...]
-                snapshot.price_15m_ago = float(klines[0][4])  # close price from ~15m ago
-                snapshot.price_5m_ago = float(klines[2][4])   # close price from ~5m ago
+                # klines layout (with limit=4 × 5m candles):
+                #   klines[0] = oldest candle (~15m ago), klines[3] = current/latest
+                #   Each entry: [open_time, open, high, low, close, volume, ...]
+                snapshot.price_15m_ago = float(klines[0][4])  # close of oldest candle (~15m ago)
+                snapshot.price_5m_ago = float(klines[2][4])   # close of second-to-last candle (~5m ago)
                 latest = klines[3]
                 snapshot.open_5m = float(latest[1])
                 snapshot.high_5m = float(latest[2])
