@@ -13,11 +13,11 @@ cd "$REPO_DIR"
 git pull origin main
 
 # 用 docker compose 构建并重启
-docker compose build --no-cache bot
-docker compose up -d --force-recreate bot
+docker compose --profile live build --no-cache
+docker compose --profile live up -d --force-recreate
 
 # 清理旧镜像
 docker image prune -f
 
 echo "=== 部署完成 ==="
-docker compose ps
+docker compose --profile live ps

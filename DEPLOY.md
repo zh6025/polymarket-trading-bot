@@ -61,7 +61,7 @@ nano .env  # 填入你的 Polymarket CLOB API 凭证
 docker compose --profile dryrun up -d
 
 # 查看日志
-docker compose logs -f bot-dryrun
+docker compose --profile dryrun logs -f
 
 # 确认日志中出现正常的 bias 计算和窗口决策后，停止 dry-run
 docker compose --profile dryrun down
@@ -89,10 +89,10 @@ CONSECUTIVE_LOSS_LIMIT=2
 
 ```bash
 # 启动实盘机器人
-docker compose up -d bot
+docker compose --profile live up -d
 
 # 查看实时日志
-docker compose logs -f bot
+docker compose --profile live logs -f
 ```
 
 ---
@@ -118,22 +118,22 @@ docker compose logs -f bot
 
 ```bash
 # 查看机器人状态
-docker compose ps
+docker compose --profile live ps
 
 # 查看实时日志
-docker compose logs -f bot
+docker compose --profile live logs -f
 
 # 查看最近 50 行日志
-docker compose logs --tail 50 bot
+docker compose --profile live logs --tail 50
 
 # 重启机器人
-docker compose restart bot
+docker compose --profile live restart
 
 # 停止机器人
-docker compose stop bot
+docker compose --profile live stop
 
 # 更新代码并重启
-git pull origin main && docker compose up -d --build bot
+git pull origin main && docker compose --profile live up -d --build
 
 # 健康检查
 bash deploy/health-check.sh

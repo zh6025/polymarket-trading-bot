@@ -87,16 +87,16 @@ jobs:
             git pull origin main
 
             echo "🐳 Rebuilding Docker image..."
-            docker compose build --no-cache bot
+            docker compose --profile live build --no-cache
 
             echo "🔄 Restarting bot container..."
-            docker compose up -d --force-recreate bot
+            docker compose --profile live up -d --force-recreate
 
             echo "🧹 Cleaning up old images..."
             docker image prune -f
 
             echo "📊 Bot status:"
-            docker compose ps
+            docker compose --profile live ps
 
             echo "✅ Deployment complete!"
           ENDSSH

@@ -13,13 +13,13 @@ nano .env   # 填入 API_KEY, API_SECRET, API_PASSPHRASE
 
 # 3. Dry-run 观察模式测试
 docker compose --profile dryrun up -d
-docker compose logs -f bot-dryrun
+docker compose --profile dryrun logs -f
 
 # 4. 确认正常后，切换实盘
 docker compose --profile dryrun down
 # 编辑 .env: TRADING_ENABLED=true, DRY_RUN=false
-docker compose up -d bot
-docker compose logs -f bot
+docker compose --profile live up -d
+docker compose --profile live logs -f
 ```
 
 ## 使用 systemd（无 Docker）
