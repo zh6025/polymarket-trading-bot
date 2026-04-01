@@ -154,6 +154,10 @@ class PolymarketClient:
     def auto_redeem_resolved(self) -> int:
         """自动赎回所有已结算仓位 (Auto-redeem all resolved positions)
 
+        Scans user positions for resolved/settled markets and redeems them
+        to recover USDC back to the account. Should be called periodically
+        (e.g. every 60s) when AUTO_REDEEM=true and DRY_RUN=false.
+
         Returns:
             Number of positions successfully redeemed
         """

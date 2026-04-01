@@ -76,12 +76,17 @@ def run_trading_cycle(
     Run one polling cycle of the trading bot.
     Returns True if we should continue, False if trading is blocked.
     """
-    # 0. Auto-redeem resolved positions to recover USDC
+    # 0. Auto-redeem resolved positions to recover USDC (every 60s)
     if config.AUTO_REDEEM and not config.DRY_RUN:
-        try:
-            client.auto_redeem_resolved()
-        except Exception as e:
-            log.warning(f"Auto-redeem failed (non-fatal): {e}")
+        now = time.time()
+        if not hasattr(run_trading_cycle, '_last_redeem_time'):
+            run_trading_cycle._last_redeem_time = 0.0
+        if now - run_trading_cycle._last_redeem_time >= 60:
+            try:
+                client.auto_redeem_resolved()
+            except Exception as e:
+                log.warning(f"Auto-redeem failed (non-fatal): {e}")
+            run_trading_cycle._last_redeem_time = now
 
     # 1. Check global risk limits
     can_trade, reason = bot_state.can_trade(
