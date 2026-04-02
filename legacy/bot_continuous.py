@@ -126,6 +126,8 @@ class ContinuousGridTrader:
         tick = market['tick_size']
         # 手续费率（每边），默认1%；往返手续费 = fee_rate × (buy + sell)
         fee_rate = float(os.getenv('FEE_RATE', '0.01'))
+        # 绝对最低盈利价差（硬底线，无论如何不低于此值）
+        min_profit_spread = float(os.getenv('MIN_PROFIT_SPREAD', '0.02'))
 
         signal = {
             'trade_up':   False,
@@ -151,28 +153,30 @@ class ContinuousGridTrader:
             return signal
 
         # UP方向: 动态计算最小盈利价差
+        # 最小价差 = max(2个tick, 手续费, 硬底线MIN_PROFIT_SPREAD)
         spread_up = prices['spread_up']
         fee_cost_up = fee_rate * (prices['up_bid'] + prices['up_ask'])
-        min_spread_up = max(tick * 2, fee_cost_up)
+        min_spread_up = max(tick * 2, fee_cost_up, min_profit_spread)
         if spread_up >= min_spread_up:
             signal['trade_up'] = True
 
         # DOWN方向: 动态计算最小盈利价差
         spread_down = prices['spread_down']
         fee_cost_down = fee_rate * (prices['down_bid'] + prices['down_ask'])
-        min_spread_down = max(tick * 2, fee_cost_down)
+        min_spread_down = max(tick * 2, fee_cost_down, min_profit_spread)
         if spread_down >= min_spread_down:
             signal['trade_down'] = True
 
         if signal['trade_up'] or signal['trade_down']:
             signal['reason'] = (
-                f"价差UP={spread_up:.4f}(需>{min_spread_up:.4f}) "
-                f"DOWN={spread_down:.4f}(需>{min_spread_down:.4f})"
+                f"价差UP={spread_up:.4f}(需>={min_spread_up:.4f}) "
+                f"DOWN={spread_down:.4f}(需>={min_spread_down:.4f})"
             )
         else:
             signal['reason'] = (
                 f"价差不足: UP={spread_up:.4f}<{min_spread_up:.4f} "
-                f"DOWN={spread_down:.4f}<{min_spread_down:.4f}"
+                f"DOWN={spread_down:.4f}<{min_spread_down:.4f} "
+                f"(底线={min_profit_spread:.4f})"
             )
 
         return signal
@@ -230,8 +234,13 @@ class ContinuousGridTrader:
     async def run(self):
         print("""
 ╔══════════════════════════════════════════════════════╗
-║    Polymarket BTC 5分钟 做市商机器人                 ║
+║    Polymarket BTC 5分钟 做市商机器人 [LEGACY]        ║
+║    ⚠️  已弃用！请改用 bot_runner.py (Strategy V3)    ║
 ╚══════════════════════════════════════════════════════╝""")
+        log_warn("⚠️  legacy/bot_continuous.py 已弃用，请部署 bot_runner.py (V3 Window Strategy)")
+        log_warn(f"⚠️  做市参数: FEE_RATE={float(os.getenv('FEE_RATE', '0.01'))}, "
+                 f"MIN_PROFIT_SPREAD={float(os.getenv('MIN_PROFIT_SPREAD', '0.02'))}, "
+                 f"HARD_CAP_PRICE={float(os.getenv('HARD_CAP_PRICE', '0.85'))}")
         mode = "🟡 DRY RUN（模拟）" if self.dry_run else "🔴 真实交易"
         print(f"模式: {mode}\n")
 
