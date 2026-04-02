@@ -61,7 +61,6 @@ class Config:
 
     # ── Strategy: Market quality filters ────────────────────────────────────
     MAX_SPREAD: float = _float('MAX_SPREAD', 0.05)
-    MIN_SPREAD: float = _float('MIN_SPREAD', 0.02)
     MIN_DEPTH: float = _float('MIN_DEPTH', 50.0)
 
     # ── Strategy: Bias computation ───────────────────────────────────────────

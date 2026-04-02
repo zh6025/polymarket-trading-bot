@@ -119,12 +119,13 @@ class ContinuousGridTrader:
     def generate_signal(self, prices: Dict, market: Dict) -> Dict:
         """
         做市商策略：
-        - spread足够大（>1个tick）→ 在bid/ask之间挂单
+        - spread足够大（覆盖手续费后有利润）→ 在bid/ask之间挂单
         - 价格接近0.5时最佳（不偏向任何方向）
         - 价格极端（<0.05或>0.95）→ 市场快结算，不交易
         """
         tick = market['tick_size']
-        min_spread = tick * 1  # 最小有效价差（需要3个tick才有利润空间）
+        # 手续费率（每边），默认1%；往返手续费 = fee_rate × (buy + sell)
+        fee_rate = float(os.getenv('FEE_RATE', '0.01'))
 
         signal = {
             'trade_up':   False,
@@ -140,20 +141,30 @@ class ContinuousGridTrader:
             signal['reason'] = f"UP价格极端({up_mid:.3f})，市场可能快结算，不交易"
             return signal
 
-        # 价差判断
-        if prices['spread_up'] >= min_spread:
+        # UP方向: 动态计算最小盈利价差
+        spread_up = prices['spread_up']
+        fee_cost_up = fee_rate * (prices['up_bid'] + prices['up_ask'])
+        min_spread_up = max(tick * 2, fee_cost_up)
+        if spread_up >= min_spread_up:
             signal['trade_up'] = True
-        if prices['spread_down'] >= min_spread:
+
+        # DOWN方向: 动态计算最小盈利价差
+        spread_down = prices['spread_down']
+        fee_cost_down = fee_rate * (prices['down_bid'] + prices['down_ask'])
+        min_spread_down = max(tick * 2, fee_cost_down)
+        if spread_down >= min_spread_down:
             signal['trade_down'] = True
 
         if signal['trade_up'] or signal['trade_down']:
             signal['reason'] = (
-                f"价差UP={prices['spread_up']:.4f} "
-                f"DOWN={prices['spread_down']:.4f} "
-                f"最小有效价差={min_spread:.4f}"
+                f"价差UP={spread_up:.4f}(需>{min_spread_up:.4f}) "
+                f"DOWN={spread_down:.4f}(需>{min_spread_down:.4f})"
             )
         else:
-            signal['reason'] = f"价差过小，不交易"
+            signal['reason'] = (
+                f"价差不足: UP={spread_up:.4f}<{min_spread_up:.4f} "
+                f"DOWN={spread_down:.4f}<{min_spread_down:.4f}"
+            )
 
         return signal
 
@@ -161,40 +172,46 @@ class ContinuousGridTrader:
     # 执行交易（dry_run下模拟）
     # ─────────────────────────────────────────
     def execute_trades(self, market: Dict, prices: Dict, signal: Dict):
-        """在bid/ask挂单做市"""
+        """在bid/ask挂单做市，内缩时确保仍覆盖手续费"""
         order_size = float(os.getenv("ORDER_SIZE", market["min_size"]))
         tick = market['tick_size']
+        fee_rate = float(os.getenv('FEE_RATE', '0.01'))
         trades = []
 
         if signal['trade_up']:
             spread = prices['spread_up']
-            if spread >= tick * 2:
-                # 价差够大：内缩1tick，赚更多
+            if spread >= tick * 3:
+                # 价差够大：内缩1tick，赚更多（内缩后仍覆盖手续费）
                 buy_price  = round(prices['up_bid'] + tick, 4)
                 sell_price = round(prices['up_ask'] - tick, 4)
             else:
-                # 价差只有1tick：直接在bid买、ask卖，赚整个价差
+                # 价差较小：直接在bid买、ask卖，赚整个价差
                 buy_price  = round(prices['up_bid'], 4)
                 sell_price = round(prices['up_ask'], 4)
 
-            if buy_price < sell_price:
+            # 确认实际利润 > 手续费后才下单
+            actual_spread = sell_price - buy_price
+            fee_cost = fee_rate * (buy_price + sell_price)
+            if buy_price < sell_price and actual_spread > fee_cost:
                 self.engine.place_order(market['up_token'], 'buy',  buy_price,  order_size)
                 self.engine.place_order(market['up_token'], 'sell', sell_price, order_size)
-                trades.append(f"UP  BUY@{buy_price:.4f} SELL@{sell_price:.4f} spread={spread:.4f}")
+                trades.append(f"UP  BUY@{buy_price:.4f} SELL@{sell_price:.4f} spread={actual_spread:.4f} fee={fee_cost:.4f}")
 
         if signal['trade_down']:
             spread = prices['spread_down']
-            if spread >= tick * 2:
+            if spread >= tick * 3:
                 buy_price  = round(prices['down_bid'] + tick, 4)
                 sell_price = round(prices['down_ask'] - tick, 4)
             else:
                 buy_price  = round(prices['down_bid'], 4)
                 sell_price = round(prices['down_ask'], 4)
 
-            if buy_price < sell_price:
+            actual_spread = sell_price - buy_price
+            fee_cost = fee_rate * (buy_price + sell_price)
+            if buy_price < sell_price and actual_spread > fee_cost:
                 self.engine.place_order(market['down_token'], 'buy',  buy_price,  order_size)
                 self.engine.place_order(market['down_token'], 'sell', sell_price, order_size)
-                trades.append(f"DOWN BUY@{buy_price:.4f} SELL@{sell_price:.4f} spread={spread:.4f}")
+                trades.append(f"DOWN BUY@{buy_price:.4f} SELL@{sell_price:.4f} spread={actual_spread:.4f} fee={fee_cost:.4f}")
 
         return trades
 
