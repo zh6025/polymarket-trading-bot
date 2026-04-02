@@ -217,11 +217,15 @@ def run_trading_cycle(
 
 
 def main():
-    log.info("🤖 BTC 5m Polymarket Multi-Window Trading Bot starting...")
+    log.info("=" * 60)
+    log.info("🤖 BTC 5m Polymarket Trading Bot — Strategy V3 (Window)")
+    log.info("   单方向多窗口策略 | NOT legacy market-making")
+    log.info("=" * 60)
 
     config = Config()
     log.info(
         f"Config: DRY_RUN={config.DRY_RUN} TRADING_ENABLED={config.TRADING_ENABLED} "
+        f"HARD_CAP={config.HARD_CAP_PRICE} MAX_SPREAD={config.MAX_SPREAD} "
         f"BET_SIZE W0={config.BET_SIZE_W0} W1={config.BET_SIZE_W1} W2={config.BET_SIZE_W2} "
         f"WINDOW0={config.WINDOW0_ENABLED} AUTO_REDEEM={config.AUTO_REDEEM}"
     )

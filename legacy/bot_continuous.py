@@ -136,6 +136,15 @@ class ContinuousGridTrader:
         up_mid   = prices['up_mid']
         down_mid = prices['down_mid']
 
+        # 硬顶保护：价格过高时风险收益比极差，不交易
+        hard_cap = float(os.getenv('HARD_CAP_PRICE', '0.85'))
+        if up_mid > hard_cap:
+            signal['reason'] = f"UP价格超过硬顶({up_mid:.3f}>{hard_cap})，风险收益比差，不交易"
+            return signal
+        if down_mid > hard_cap:
+            signal['reason'] = f"DOWN价格超过硬顶({down_mid:.3f}>{hard_cap})，风险收益比差，不交易"
+            return signal
+
         # 价格极端判断（市场快结算）
         if up_mid < 0.005 or up_mid > 0.995:
             signal['reason'] = f"UP价格极端({up_mid:.3f})，市场可能快结算，不交易"
