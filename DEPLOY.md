@@ -129,8 +129,12 @@ docker compose --profile live logs --tail 50
 # 重启机器人
 docker compose --profile live restart
 
-# 停止机器人
-docker compose --profile live stop
+# 停止机器人（多种方式）
+bash deploy/stop.sh              # 停止所有容器
+bash deploy/stop.sh live         # 只停止实盘
+bash deploy/stop.sh dryrun       # 只停止 dry-run
+bash deploy/stop.sh pause        # 暂停交易（TRADING_ENABLED=false，容器保持运行）
+bash deploy/stop.sh down         # 完全移除容器和网络
 
 # 更新代码并重启
 git pull origin main && docker compose --profile live up -d --build
