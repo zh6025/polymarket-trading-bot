@@ -169,6 +169,7 @@ def run_trading_cycle(
         min_confidence_w1=config.MIN_CONFIDENCE_W1,
         late_entry_min_price=config.LATE_ENTRY_MIN_PRICE,
         max_spread=config.MAX_SPREAD,
+        min_spread=config.MIN_SPREAD,
         min_depth=config.MIN_DEPTH,
         recent_volatility=recent_volatility,
         max_recent_volatility=config.MAX_RECENT_VOLATILITY,

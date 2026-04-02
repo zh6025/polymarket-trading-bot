@@ -56,6 +56,7 @@ def evaluate_window0(
     hard_cap_price: float = 0.85,
     min_confidence: float = 0.70,
     max_spread: float = 0.04,
+    min_spread: float = 0.02,
     min_depth: float = 30.0,
     window0_enabled: bool = False,
 ) -> WindowDecision:
@@ -83,6 +84,9 @@ def evaluate_window0(
 
     if ob.spread is not None and ob.spread > max_spread:
         return _no_action(f"window0_spread_too_wide {ob.spread:.3f}", 0)
+
+    if ob.spread is not None and ob.spread < min_spread:
+        return _no_action(f"window0_spread_too_thin {ob.spread:.3f}<{min_spread}", 0)
 
     if (ob.bid_depth + ob.ask_depth) < min_depth:
         return _no_action("window0_depth_insufficient", 0)
@@ -142,6 +146,7 @@ def evaluate_window1(
     hard_cap_price: float = 0.85,
     min_confidence: float = 0.55,
     max_spread: float = 0.05,
+    min_spread: float = 0.02,
     min_depth: float = 50.0,
 ) -> WindowDecision:
     """Window 1: Primary entry window (~90-95s remaining)"""
@@ -170,6 +175,9 @@ def evaluate_window1(
     if ob.spread is not None and ob.spread > max_spread:
         return _no_action(f"window1_spread_too_wide {ob.spread:.3f}", 1)
 
+    if ob.spread is not None and ob.spread < min_spread:
+        return _no_action(f"window1_spread_too_thin {ob.spread:.3f}<{min_spread}", 1)
+
     if (ob.bid_depth + ob.ask_depth) < min_depth:
         return _no_action("window1_depth_insufficient", 1)
 
@@ -194,6 +202,7 @@ def evaluate_window2(
     hard_cap_price: float = 0.85,
     late_entry_min_price: float = 0.65,
     max_spread: float = 0.04,
+    min_spread: float = 0.02,
     min_depth: float = 50.0,
 ) -> WindowDecision:
     """Window 2: Final window (~30-35s remaining)
@@ -240,6 +249,9 @@ def evaluate_window2(
     if ob.spread is not None and ob.spread > max_spread:
         return _no_action(f"window2_spread_too_wide {ob.spread:.3f}", 2)
 
+    if ob.spread is not None and ob.spread < min_spread:
+        return _no_action(f"window2_spread_too_thin {ob.spread:.3f}<{min_spread}", 2)
+
     if (ob.bid_depth + ob.ask_depth) < min_depth:
         return _no_action("window2_depth_insufficient", 2)
 
@@ -267,6 +279,7 @@ def run_window_strategy(
     min_confidence_w1: float = 0.55,
     late_entry_min_price: float = 0.65,
     max_spread: float = 0.05,
+    min_spread: float = 0.02,
     min_depth: float = 50.0,
     recent_volatility: Optional[float] = None,
     max_recent_volatility: float = 0.20,
@@ -286,6 +299,7 @@ def run_window_strategy(
         bet_size: Default bet size in USDC (used when per-window sizes not provided)
         hard_cap_price: Never buy above this price
         window0_enabled: Feature flag for window 0
+        min_spread: Minimum spread required to trade (skip if too thin to cover fees)
         recent_volatility: Recent price change fraction (for safety check)
         max_recent_volatility: If recent volatility exceeds this, skip
         bet_size_w0: Bet size for window 0 (overrides bet_size)
@@ -306,7 +320,8 @@ def run_window_strategy(
             session=session, secs_remaining=secs_remaining, bias=bias,
             ob_up=ob_up, ob_down=ob_down, bet_size=size_w0,
             hard_cap_price=hard_cap_price, min_confidence=min_confidence_w0,
-            max_spread=max_spread, min_depth=min_depth, window0_enabled=window0_enabled,
+            max_spread=max_spread, min_spread=min_spread, min_depth=min_depth,
+            window0_enabled=window0_enabled,
         )
         session.window0_processed = True
         if result.action != 'SKIP':
@@ -328,7 +343,7 @@ def run_window_strategy(
             session=session, secs_remaining=secs_remaining, bias=bias,
             ob_up=ob_up, ob_down=ob_down, bet_size=size_w1,
             hard_cap_price=hard_cap_price, min_confidence=min_confidence_w1,
-            max_spread=max_spread, min_depth=min_depth,
+            max_spread=max_spread, min_spread=min_spread, min_depth=min_depth,
         )
         session.window1_processed = True
         if result.action != 'SKIP':
@@ -340,7 +355,7 @@ def run_window_strategy(
             session=session, secs_remaining=secs_remaining, bias=bias,
             ob_up=ob_up, ob_down=ob_down, bet_size=size_w2,
             hard_cap_price=hard_cap_price, late_entry_min_price=late_entry_min_price,
-            max_spread=max_spread, min_depth=min_depth,
+            max_spread=max_spread, min_spread=min_spread, min_depth=min_depth,
         )
         session.window2_processed = True
         if result.action != 'SKIP':
