@@ -239,8 +239,8 @@ def main():
         log.warning("🔴 真实交易模式！TRADING_ENABLED=true, DRY_RUN=false — LIVE TRADING!")
 
     try:
-        log.info("Initializing bot state...")
-        bot_state = BotState.load()
+        log.info(f"Initializing bot state (file={config.STATE_FILE})...")
+        bot_state = BotState.load(config.STATE_FILE)
         bot_state.trading_enabled = config.TRADING_ENABLED
         log.info("Initializing session...")
         session = SessionState()

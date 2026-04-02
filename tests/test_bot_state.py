@@ -49,6 +49,44 @@ class TestBotStateSaveLoad:
         assert os.path.exists(path)
         assert not os.path.exists(path + ".tmp")
 
+    def test_load_sets_state_path_and_save_uses_it(self, tmp_path):
+        """load() remembers path; save() with no args uses it."""
+        path = str(tmp_path / "s.json")
+        state = BotState()
+        state.total_pnl = 7.77
+        state.save(path)
+
+        loaded = BotState.load(path)
+        assert loaded._state_path == path
+        loaded.total_pnl = 8.88
+        loaded.save()  # no explicit path
+
+        reloaded = BotState.load(path)
+        assert reloaded.total_pnl == 8.88
+
+    def test_state_path_not_serialised(self, tmp_path):
+        """_state_path must not appear in the JSON file."""
+        path = str(tmp_path / "s.json")
+        state = BotState()
+        state.save(path)
+        with open(path) as f:
+            data = json.load(f)
+        assert '_state_path' not in data
+
+    def test_load_directory_as_state_path(self, tmp_path):
+        """Docker volume mount creates dirs for missing files – load handles it."""
+        path = str(tmp_path / "dir_state.json")
+        os.mkdir(path)  # simulate Docker creating a directory
+        state = BotState.load(path)
+        assert state.total_pnl == 0.0  # fresh state
+
+    def test_save_creates_parent_directory(self, tmp_path):
+        """save() auto-creates parent dirs (e.g. data/bot_state.json)."""
+        path = str(tmp_path / "subdir" / "state.json")
+        state = BotState()
+        state.save(path)
+        assert os.path.exists(path)
+
 
 class TestBotStateDailyReset:
     def test_daily_reset_on_date_change(self):

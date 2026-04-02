@@ -6,6 +6,7 @@ scripts/
 __pycache__/
 *.db
 bot_state.json
+data/
 tests/
 docs/
 deploy/

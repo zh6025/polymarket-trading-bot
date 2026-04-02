@@ -11,9 +11,9 @@ services:
       - TRADING_ENABLED=${TRADING_ENABLED:-false}
       - POLLING_INTERVAL=${POLLING_INTERVAL:-5000}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - STATE_FILE=data/bot_state.json
     volumes:
-      - ./bot_state.json:/app/bot_state.json
-      - ./logs:/app/logs
+      - ./data:/app/data
     restart: unless-stopped
     networks:
       - bot-network
@@ -36,9 +36,9 @@ services:
       - TRADING_ENABLED=true
       - POLLING_INTERVAL=5000
       - LOG_LEVEL=INFO
+      - STATE_FILE=data/bot_state.json
     volumes:
-      - ./dryrun_state.json:/app/bot_state.json
-      - ./logs/dryrun:/app/logs
+      - ./data/dryrun:/app/data
     restart: unless-stopped
     networks:
       - bot-network

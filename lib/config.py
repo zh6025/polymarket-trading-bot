@@ -91,5 +91,10 @@ class Config:
     # 自动赎回已结算仓位，回收USDC (auto-redeem resolved positions)
     AUTO_REDEEM: bool = _bool('AUTO_REDEEM', True)
 
+    # ── State persistence ────────────────────────────────────────────────────
+    # Path to the bot state JSON file.  Override via env var when running
+    # inside Docker with a directory-based volume mount, e.g. STATE_FILE=data/bot_state.json
+    STATE_FILE: str = os.getenv('STATE_FILE', 'bot_state.json')
+
     # ── Logging ──────────────────────────────────────────────────────────────
     LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')

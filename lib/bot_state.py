@@ -43,6 +43,10 @@ class BotState:
     total_pnl: float = 0.0
     circuit_breaker: bool = False
 
+    # ── Internal: not serialised ────────────────────────────────────────────
+    # Path used for save(); set by load() so callers don't need to repeat it.
+    _state_path: str = field(default="bot_state.json", repr=False, compare=False)
+
     def check_daily_reset(self):
         """UTC日切时自动归零"""
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -81,8 +85,14 @@ class BotState:
             self.consecutive_losses = 0
         self.last_trade_time = time.time()
 
-    def save(self, path: str = "bot_state.json"):
+    def save(self, path: str = ""):
         """原子写入"""
+        if not path:
+            path = self._state_path
+        # Ensure parent directory exists (e.g. data/ for data/bot_state.json)
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         # Guard against path being a directory (e.g. Docker volume mount of non-existent file).
         # Use rmdir (not shutil.rmtree) intentionally: only remove empty dirs.  If it has
         # contents something else is wrong and we must not silently delete data.
@@ -95,8 +105,10 @@ class BotState:
                 return
         tmp = path + ".tmp"
         try:
+            data = asdict(self)
+            data.pop('_state_path', None)  # internal field, not persisted
             with open(tmp, 'w') as f:
-                json.dump(asdict(self), f, indent=2)
+                json.dump(data, f, indent=2)
             os.replace(tmp, path)
         except Exception as e:
             log.error(f"State save failed: {e}")
@@ -110,6 +122,7 @@ class BotState:
             state = cls(**{k: v for k, v in data.items()
                           if k in cls.__dataclass_fields__})
             state.check_daily_reset()
+            state._state_path = path
             log.info(f"✅ State loaded: PnL=${state.total_pnl:.2f} today=${state.daily_pnl:.2f}")
             return state
         # Catch all errors: OSError (IsADirectoryError for Docker volumes, PermissionError),
@@ -118,4 +131,5 @@ class BotState:
             log.info(f"No valid state file, starting fresh: {e}")
             state = cls()
             state.current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            state._state_path = path
             return state
