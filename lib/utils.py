@@ -4,8 +4,9 @@ import zlib
 import gzip
 import time
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] %(message)s')
+# Module-level logger – do NOT call basicConfig here; let the entry-point
+# (bot_runner.py) own the root-logger configuration so that format, level,
+# and handlers are consistent everywhere.
 logger = logging.getLogger(__name__)
 
 class APIClient:

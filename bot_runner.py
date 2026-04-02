@@ -237,11 +237,15 @@ def main():
     if not config.DRY_RUN and config.TRADING_ENABLED:
         log.warning("🔴 真实交易模式！TRADING_ENABLED=true, DRY_RUN=false — LIVE TRADING!")
 
-    bot_state = BotState.load()
-    bot_state.trading_enabled = config.TRADING_ENABLED
-    session = SessionState()
-    client = PolymarketClient()
-    data_fetcher = MarketDataFetcher()
+    try:
+        bot_state = BotState.load()
+        bot_state.trading_enabled = config.TRADING_ENABLED
+        session = SessionState()
+        client = PolymarketClient()
+        data_fetcher = MarketDataFetcher()
+    except Exception as e:
+        log.critical(f"💀 Fatal error during initialization: {e}", exc_info=True)
+        sys.exit(1)
 
     interval_sec = config.POLLING_INTERVAL / 1000.0
     log.info(f"Starting main loop (polling every {interval_sec:.1f}s)")
@@ -266,4 +270,10 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        log.info("⛔ Interrupted by user")
+    except Exception as e:
+        log.critical(f"💀 Unhandled exception — bot crashed: {e}", exc_info=True)
+        sys.exit(1)
