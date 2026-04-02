@@ -83,7 +83,9 @@ class BotState:
 
     def save(self, path: str = "bot_state.json"):
         """原子写入"""
-        # Guard against path being a directory (e.g. Docker volume mount of non-existent file)
+        # Guard against path being a directory (e.g. Docker volume mount of non-existent file).
+        # Use rmdir (not shutil.rmtree) intentionally: only remove empty dirs.  If it has
+        # contents something else is wrong and we must not silently delete data.
         if os.path.isdir(path):
             log.warning(f"State path '{path}' is a directory (likely Docker volume mount issue), removing it")
             try:
@@ -110,6 +112,8 @@ class BotState:
             state.check_daily_reset()
             log.info(f"✅ State loaded: PnL=${state.total_pnl:.2f} today=${state.daily_pnl:.2f}")
             return state
+        # OSError covers IsADirectoryError (Docker volume mount) and PermissionError.
+        # ValueError covers unexpected numeric conversions from corrupted JSON data.
         except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
             log.info(f"No valid state file, starting fresh: {e}")
             state = cls()
