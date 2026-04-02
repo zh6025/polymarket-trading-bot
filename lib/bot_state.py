@@ -85,9 +85,9 @@ class BotState:
             self.consecutive_losses = 0
         self.last_trade_time = time.time()
 
-    def save(self, path: str = ""):
+    def save(self, path: Optional[str] = None):
         """原子写入"""
-        if not path:
+        if path is None:
             path = self._state_path
         # Ensure parent directory exists (e.g. data/ for data/bot_state.json)
         parent = os.path.dirname(path)
@@ -128,7 +128,7 @@ class BotState:
         # Catch all errors: OSError (IsADirectoryError for Docker volumes, PermissionError),
         # JSON/type errors from corrupted state, and anything else unexpected.
         except Exception as e:
-            log.info(f"No valid state file, starting fresh: {e}")
+            log.info(f"No valid state file, starting fresh: {type(e).__name__}: {e}")
             state = cls()
             state.current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             state._state_path = path
