@@ -112,9 +112,9 @@ class BotState:
             state.check_daily_reset()
             log.info(f"✅ State loaded: PnL=${state.total_pnl:.2f} today=${state.daily_pnl:.2f}")
             return state
-        # OSError covers IsADirectoryError (Docker volume mount) and PermissionError.
-        # ValueError covers unexpected numeric conversions from corrupted JSON data.
-        except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
+        # Catch all errors: OSError (IsADirectoryError for Docker volumes, PermissionError),
+        # JSON/type errors from corrupted state, and anything else unexpected.
+        except Exception as e:
             log.info(f"No valid state file, starting fresh: {e}")
             state = cls()
             state.current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")

@@ -29,6 +29,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)s %(name)s: %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)],
+    force=True,  # Override any prior basicConfig (e.g. from lib.utils import side-effect)
 )
 log = logging.getLogger(__name__)
 
@@ -238,16 +239,21 @@ def main():
         log.warning("🔴 真实交易模式！TRADING_ENABLED=true, DRY_RUN=false — LIVE TRADING!")
 
     try:
+        log.info("Initializing bot state...")
         bot_state = BotState.load()
         bot_state.trading_enabled = config.TRADING_ENABLED
+        log.info("Initializing session...")
         session = SessionState()
+        log.info("Initializing Polymarket client...")
         client = PolymarketClient()
+        log.info("Initializing market data fetcher...")
         data_fetcher = MarketDataFetcher()
+        log.info("✅ All components initialized successfully")
     except Exception as e:
         log.critical(f"💀 Fatal error during initialization: {e}", exc_info=True)
         sys.exit(1)
 
-    interval_sec = config.POLLING_INTERVAL / 1000.0
+    interval_sec = max(config.POLLING_INTERVAL / 1000.0, 1.0)
     log.info(f"Starting main loop (polling every {interval_sec:.1f}s)")
 
     while True:
@@ -266,7 +272,12 @@ def main():
         except Exception as e:
             log.error(f"Unexpected error in trading cycle: {e}", exc_info=True)
 
-        time.sleep(interval_sec)
+        try:
+            time.sleep(interval_sec)
+        except KeyboardInterrupt:
+            log.info("⛔ Interrupted by user")
+            bot_state.save()
+            break
 
 
 if __name__ == '__main__':
