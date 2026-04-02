@@ -9,5 +9,4 @@ bot_state.json
 tests/
 docs/
 deploy/
-legacy/
 *.md

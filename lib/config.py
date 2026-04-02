@@ -63,13 +63,6 @@ class Config:
     MAX_SPREAD: float = _float('MAX_SPREAD', 0.05)
     MIN_DEPTH: float = _float('MIN_DEPTH', 50.0)
 
-    # ── Legacy market-making: minimum profitable spread ──────────────────
-    # 做市商最低盈利价差 (absolute floor, must exceed fees)
-    # With 1% fee per side: round-trip fee on $1.00 = $0.02, so min spread must be > 0.02
-    MIN_PROFIT_SPREAD: float = _float('MIN_PROFIT_SPREAD', 0.02)
-    # 做市商手续费率 (per side, default 1%)
-    FEE_RATE: float = _float('FEE_RATE', 0.01)
-
     # ── Strategy: Bias computation ───────────────────────────────────────────
     MOMENTUM_5M_THRESHOLD: float = _float('MOMENTUM_5M_THRESHOLD', 0.0015)
     MOMENTUM_15M_THRESHOLD: float = _float('MOMENTUM_15M_THRESHOLD', 0.003)
