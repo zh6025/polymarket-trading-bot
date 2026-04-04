@@ -10,8 +10,7 @@ class Config:
         self.order_size = self.get_float('ORDER_SIZE', default=5.0)
         self.check_interval_sec = max(1, int(self.get_float('CHECK_INTERVAL_SEC', default=5.0)))
 
-    @staticmethod
-    def get_env_variable(var_name, default=None):
+    def get_env_variable(self, var_name, default=None):
         value = os.getenv(var_name)
         return default if value is None else value
 
