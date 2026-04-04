@@ -5,7 +5,6 @@ node_modules
 scripts/
 __pycache__/
 *.db
-bot_state.json
 tests/
 docs/
 deploy/
