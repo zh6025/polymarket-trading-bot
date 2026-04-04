@@ -33,7 +33,13 @@ jobs:
           CHECK_INTERVAL_SEC: "5"
         run: |
           echo "Running bot_continuous.py in dry-run mode..."
-          timeout 30 python bot_continuous.py || true
+          set +e
+          timeout 30 python bot_continuous.py
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
+            exit "$status"
+          fi
           echo "✅ Smoke test completed"
 
       - name: 🐳 Build Docker image

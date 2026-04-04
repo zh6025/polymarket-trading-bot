@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional
+from lib.config import Config
 from lib.polymarket_client import PolymarketClient
 from lib.trading_engine import TradingEngine
 from lib.utils import log_info, log_error, log_warn
@@ -164,7 +165,7 @@ class ContinuousGridTrader:
             market_min_size = float(market.get("min_size", self.order_size))
         except (TypeError, ValueError):
             market_min_size = self.order_size
-        order_size = self.order_size if self.order_size >= market_min_size else market_min_size
+        order_size = max(self.order_size, market_min_size)
         tick = market['tick_size']
         trades = []
 
@@ -303,7 +304,6 @@ class ContinuousGridTrader:
                 await asyncio.sleep(10)
 
 async def main():
-    from lib.config import Config
     config = Config()
     bot = ContinuousGridTrader(
         dry_run=config.dry_run,

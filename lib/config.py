@@ -3,7 +3,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-
 class Config:
     def __init__(self):
         self.dry_run = self.get_bool('DRY_RUN', default=True)
