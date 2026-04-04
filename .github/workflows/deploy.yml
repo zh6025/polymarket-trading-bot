@@ -34,12 +34,13 @@ jobs:
         run: |
           echo "Running bot_continuous.py in dry-run mode..."
           set +e
-          timeout 30 python bot_continuous.py
-          status=$?
+          timeout 30 python bot_continuous.py 2>&1 | tee smoke.log
+          status=${PIPESTATUS[0]}
           set -e
-          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
+          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ] && [ "$status" -ne 143 ]; then
             exit "$status"
           fi
+          grep -q "查找当前活跃市场" smoke.log
           echo "✅ Smoke test completed"
 
       - name: 🐳 Build Docker image
