@@ -1,8 +1,0 @@
-[tool]
-name = "polymarket-btc-trading-bot"
-version = "0.1.0"
-
-[project]
-description = "A simplified Polymarket BTC 5-minute bot with a single continuous entrypoint"
-authors = ["zh6025 <you@example.com>"]
-license = "MIT"

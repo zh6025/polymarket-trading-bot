@@ -5,7 +5,4 @@ node_modules
 scripts/
 __pycache__/
 *.db
-tests/
-docs/
-deploy/
 *.md
