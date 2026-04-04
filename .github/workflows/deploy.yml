@@ -4,12 +4,11 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:   # 支持手动触发
+  workflow_dispatch:
 
 jobs:
-  # ============ 第一步：构建测试 ============
   test:
-    name: 🧪 Build & Test (Dry-Run)
+    name: 🧪 Build & Test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -26,36 +25,29 @@ jobs:
       - name: 📦 Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt pytest
 
-      - name: ✅ Run bot dry-run test
+      - name: ✅ Run tests
+        run: python -m pytest tests -q
+
+      - name: ✅ Run bot startup smoke test
         env:
-          API_KEY: demo-key
           DRY_RUN: "true"
-          SERIES_SLUG: btc-up-or-down-5m
-          LEVELS_EACH_SIDE: "3"
-          GRID_STEP: "0.02"
-          ORDER_SIZE: "1"
-          TRADE_BOTH_OUTCOMES: "true"
-          DAILY_LOSS_LIMIT: "100"
-          MAX_POSITION_SIZE: "500"
-          POLLING_INTERVAL: "60000"
-          LOG_LEVEL: info
+          CHECK_INTERVAL_SEC: "5"
         run: |
-          echo "Running bot_runner.py in dry-run mode..."
-          timeout 30 python bot_runner.py || true
-          echo "✅ Dry-run test completed"
+          echo "Running bot_continuous.py in dry-run mode..."
+          timeout 30 python bot_continuous.py || true
+          echo "✅ Smoke test completed"
 
       - name: 🐳 Build Docker image
         run: |
           docker build -t polymarket-bot:test .
           echo "✅ Docker image built successfully"
 
-  # ============ 第二步：SSH 部署到 AWS 东京 ============
   deploy:
     name: 🌏 Deploy to AWS Tokyo (ap-northeast-1)
     runs-on: ubuntu-latest
-    needs: test          # 必须测试通过才部署
+    needs: test
     if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
@@ -78,30 +70,10 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $USER@$HOST << 'ENDSSH'
             set -e
-            echo "📂 Navigating to project directory..."
             cd ~/polymarket-trading-bot
-
-            echo "📥 Pulling latest code from main..."
             git pull origin main
-
-            echo "🐳 Rebuilding Docker image..."
             docker-compose build --no-cache bot
-
-            echo "🔄 Restarting bot container..."
             docker-compose up -d --force-recreate bot
-
-            echo "🧹 Cleaning up old images..."
             docker image prune -f
-
-            echo "📊 Bot status:"
             docker-compose ps
-
-            echo "✅ Deployment complete!"
           ENDSSH
-
-      - name: 📣 Notify deployment success
-        if: success()
-        run: |
-          echo "🎉 Successfully deployed to AWS Tokyo VPS!"
-          echo "Server: ${{ secrets.AWS_TOKYO_HOST }}"
-          echo "Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"

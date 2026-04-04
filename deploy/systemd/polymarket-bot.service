@@ -7,7 +7,7 @@ Type=simple
 User=polymarket
 WorkingDirectory=/opt/polymarket-bot
 EnvironmentFile=/opt/polymarket-bot/.env
-ExecStart=/opt/polymarket-bot/.venv/bin/python bot_runner.py
+ExecStart=/opt/polymarket-bot/.venv/bin/python bot_continuous.py
 Restart=on-failure
 RestartSec=10
 

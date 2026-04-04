@@ -1,11 +1,9 @@
-import os
 import asyncio
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional
 from lib.polymarket_client import PolymarketClient
 from lib.trading_engine import TradingEngine
-from lib.data_persistence import DataPersistence
 from lib.utils import log_info, log_error, log_warn
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] %(message)s")
@@ -17,13 +15,13 @@ class MarketExpiredError(Exception):
 class ContinuousGridTrader:
     """连续5分钟周期BTC网格交易机器人"""
 
-    def __init__(self, dry_run=True):
+    def __init__(self, dry_run=True, order_size=5.0, check_interval=5):
         self.client = PolymarketClient()
         self.engine = TradingEngine(dry_run=dry_run)
-        self.db = DataPersistence()
         self.dry_run = dry_run
+        self.order_size = order_size
 
-        self.check_interval = 5     # 每5秒轮询一次orderbook
+        self.check_interval = max(int(check_interval), 1)
         self.total_cycles = 0
         self.market_prices = {}     # token_id -> [价格历史]
 
@@ -162,7 +160,7 @@ class ContinuousGridTrader:
     # ─────────────────────────────────────────
     def execute_trades(self, market: Dict, prices: Dict, signal: Dict):
         """在bid/ask挂单做市"""
-        order_size = float(os.getenv("ORDER_SIZE", market["min_size"]))
+        order_size = max(self.order_size, market["min_size"])
         tick = market['tick_size']
         trades = []
 
@@ -300,13 +298,14 @@ class ContinuousGridTrader:
                 import traceback; traceback.print_exc()
                 await asyncio.sleep(10)
 
-        self.db.close()
-
-
 async def main():
     from lib.config import Config
     config = Config()
-    bot = ContinuousGridTrader(dry_run=config.dry_run)
+    bot = ContinuousGridTrader(
+        dry_run=config.dry_run,
+        order_size=config.order_size,
+        check_interval=config.check_interval_sec,
+    )
     await bot.run()
 
 if __name__ == "__main__":
