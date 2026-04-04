@@ -160,7 +160,11 @@ class ContinuousGridTrader:
     # ─────────────────────────────────────────
     def execute_trades(self, market: Dict, prices: Dict, signal: Dict):
         """在bid/ask挂单做市"""
-        order_size = max(self.order_size, market["min_size"])
+        try:
+            min_size = float(market.get("min_size", self.order_size))
+        except (TypeError, ValueError):
+            min_size = self.order_size
+        order_size = max(self.order_size, min_size)
         tick = market['tick_size']
         trades = []
 
