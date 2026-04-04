@@ -23,3 +23,13 @@ def test_config_parses_env_values(monkeypatch):
     assert config.dry_run is False
     assert config.order_size == 2.5
     assert config.check_interval_sec == 1
+
+
+def test_config_clamps_negative_interval_and_ignores_invalid_float(monkeypatch):
+    monkeypatch.setenv('ORDER_SIZE', 'invalid')
+    monkeypatch.setenv('CHECK_INTERVAL_SEC', '-3')
+
+    config = Config()
+
+    assert config.order_size == 5.0
+    assert config.check_interval_sec == 1

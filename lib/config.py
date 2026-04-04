@@ -25,4 +25,7 @@ class Config:
         value = self.get_env_variable(var_name)
         if value is None:
             return default
-        return float(value)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
