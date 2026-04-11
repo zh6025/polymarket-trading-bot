@@ -110,7 +110,22 @@ class SniperBot:
 
         # 4. 如果剩余 > entry_window_high + 5s：仅记录价格，等待入场窗口
         if remaining_seconds > self.strategy.entry_window_high + 5:
-            log_info(f"⏳ 等待入场窗口 (剩余{remaining_seconds}s > {self.strategy.entry_window_high + 5}s)")
+            # 读取UP/DOWN份额价格用于监控显示，失败时用N/A
+            up_str = "N/A"
+            down_str = "N/A"
+            try:
+                _markets = event.get('markets', [])
+                _up_m = next((m for m in _markets if 'UP' in m.get('groupItemTitle', '').upper()), None)
+                _down_m = next((m for m in _markets if 'DOWN' in m.get('groupItemTitle', '').upper()), None)
+                if _up_m is None and len(_markets) >= 2:
+                    _up_m, _down_m = _markets[0], _markets[1]
+                if _up_m:
+                    up_str = f"{float(_up_m.get('outcomePrices', ['0.5'])[0]):.3f}"
+                if _down_m:
+                    down_str = f"{float(_down_m.get('outcomePrices', ['0.5'])[0]):.3f}"
+            except Exception:
+                pass
+            log_info(f"⏳ 等待入场窗口 (剩余{remaining_seconds}s) | BTC={btc_price:.2f} | UP份额={up_str} DOWN份额={down_str}")
             return
 
         # 5. 检查该窗口是否已经入场过
