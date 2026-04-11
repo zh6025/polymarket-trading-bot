@@ -117,7 +117,7 @@ class SniperBot:
                 _markets = event.get('markets', [])
                 _up_m = next((m for m in _markets if 'UP' in m.get('groupItemTitle', '').upper()), None)
                 _down_m = next((m for m in _markets if 'DOWN' in m.get('groupItemTitle', '').upper()), None)
-                if _up_m is None and len(_markets) >= 2:
+                if _up_m is None and _down_m is None and len(_markets) >= 2:
                     _up_m, _down_m = _markets[0], _markets[1]
                 if _up_m:
                     up_str = f"{float(_up_m.get('outcomePrices', ['0.5'])[0]):.3f}"
