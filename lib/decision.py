@@ -6,6 +6,8 @@
 4. Spread 检查
 5. 深度检查
 6. 信号评分检查
+
+当 strategy='sniper' 时，走 SniperStrategy 逻辑。
 """
 import logging
 from lib.hedge_formula import (
@@ -35,6 +37,9 @@ def make_trade_decision(
     min_depth: float = 50,
     min_confidence: float = 0.15,
     fee: float = FEE_RATE,
+    # 狙击策略专用参数（strategy='sniper' 时生效）
+    strategy: str = 'imbalance',
+    sniper_result: dict = None,
 ) -> dict:
     """
     返回 {
@@ -51,6 +56,10 @@ def make_trade_decision(
         'main_price': 0, 'hedge_price': None,
         'hedge_quantity': None, 'reason': ''
     }
+
+    # 末端狙击策略分支
+    if strategy == 'sniper':
+        return _make_sniper_decision(sniper_result, result)
 
     # Gate 1: 硬停
     if remaining_seconds < hard_stop_sec:
@@ -112,4 +121,34 @@ def make_trade_decision(
 
     result['action'] = 'ENTER_MAIN_ONLY'
     result['reason'] = f"✅ 仅主仓: {bet_direction} @ {main_price:.3f} (对冲价{hedge_price:.3f}不在窗口)"
+    return result
+
+
+def _make_sniper_decision(sniper_result: dict, base_result: dict) -> dict:
+    """
+    将 SniperStrategy.evaluate() 的输出转换为标准决策格式。
+    """
+    result = base_result.copy()
+    if sniper_result is None:
+        result['reason'] = "sniper策略: 未提供sniper_result"
+        return result
+
+    action = sniper_result.get('action', 'SKIP')
+    reasoning = sniper_result.get('reasoning', '')
+
+    if action == 'SKIP':
+        result['reason'] = reasoning
+        return result
+
+    direction = sniper_result.get('direction')
+    entry_price = sniper_result.get('entry_price', 0.0)
+
+    result['action'] = 'ENTER_MAIN_ONLY'
+    result['direction'] = direction
+    result['main_price'] = entry_price
+    result['reason'] = reasoning
+    # 额外透传狙击专有字段
+    result['edge'] = sniper_result.get('edge', 0.0)
+    result['kelly_fraction'] = sniper_result.get('kelly_fraction', 0.0)
+    result['estimated_prob'] = sniper_result.get('estimated_prob', 0.5)
     return result
