@@ -56,6 +56,14 @@ class Config:
         # 下注规模（USDC）
         self.bet_size_usdc = float(self.get_env_variable('BET_SIZE_USDC', required=False, default='3.0'))
 
+        # ---- 末端狙击策略配置 ----
+        self.sniper_entry_secs = int(self.get_env_variable('SNIPER_ENTRY_SECS', required=False, default='30'))
+        self.sniper_price_min = float(self.get_env_variable('SNIPER_PRICE_MIN', required=False, default='0.55'))
+        self.sniper_price_max = float(self.get_env_variable('SNIPER_PRICE_MAX', required=False, default='0.60'))
+        self.sniper_min_delta_bps = float(self.get_env_variable('SNIPER_MIN_DELTA_BPS', required=False, default='2.0'))
+        self.sniper_momentum_secs = int(self.get_env_variable('SNIPER_MOMENTUM_SECS', required=False, default='30'))
+        self.sniper_kelly_fraction = float(self.get_env_variable('SNIPER_KELLY_FRACTION', required=False, default='0.5'))
+
     def get_env_variable(self, var_name, required=False, default=None):
         value = os.getenv(var_name)
         if value is None:
