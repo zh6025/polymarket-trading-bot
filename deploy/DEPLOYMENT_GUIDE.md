@@ -27,19 +27,27 @@ cd deploy
 docker-compose -f docker-compose.prod.yml up -d
 ```
 
-## 使用 systemd
+## 使用 systemd（Docker Compose 方式）
 
 ```bash
-# 创建虚拟环境
-python3 -m venv /opt/polymarket-bot/.venv
-/opt/polymarket-bot/.venv/bin/pip install -r requirements.txt
+# 确保 Docker 和 Docker Compose 已安装
+# 项目已克隆到 /opt/polymarket-bot
 
 # 安装服务
-cp deploy/systemd/polymarket-bot.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable polymarket-bot
-systemctl start polymarket-bot
+sudo cp deploy/systemd/polymarket-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable polymarket-bot
+sudo systemctl start polymarket-bot
+
+# 查看状态
+sudo systemctl status polymarket-bot --no-pager -l
+
+# 查看日志
+sudo journalctl -u polymarket-bot -n 50 --no-pager
 ```
+
+> **注意**：systemd 服务会在启动前自动清理旧容器（`ExecStartPre=-docker compose down --remove-orphans`），
+> 避免出现容器名 `/polymarket-bot` 冲突的问题。
 
 ## 开启真实交易
 

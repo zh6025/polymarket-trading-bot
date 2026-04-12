@@ -39,8 +39,8 @@ newgrp docker
 sudo apt install docker-compose -y
 
 # 克隆项目
-git clone https://github.com/zh6025/polymarket-trading-bot.git
-cd polymarket-trading-bot
+git clone https://github.com/zh6025/polymarket-trading-bot.git /opt/polymarket-bot
+cd /opt/polymarket-bot
 
 # 配置环境变量
 cp .env.example .env
@@ -91,17 +91,38 @@ docker-compose ps
 # 查看实时日志
 docker-compose logs -f bot
 
-# 重启机器人
-docker-compose restart bot
+# 重启机器人（推荐：先 down 再 up，避免容器名冲突）
+docker-compose down --remove-orphans && docker-compose up -d bot
 
 # 停止机器人
-docker-compose stop bot
+docker-compose down
 
 # 启动 Web 监控面板（端口 8501）
 docker-compose --profile dashboard up -d
 
 # 更新代码并重启
-git pull origin main && docker-compose up -d --build bot
+git pull origin main && docker-compose down --remove-orphans && docker-compose up -d --build bot
+```
+
+### systemd 管理（服务器已安装服务时）
+
+```bash
+# 重启（服务会自动清理旧容器）
+sudo systemctl restart polymarket-bot
+
+# 查看状态
+sudo systemctl status polymarket-bot --no-pager -l
+
+# 查看日志
+sudo journalctl -u polymarket-bot -n 50 --no-pager
+
+# 重新加载并重启（含镜像重建）
+sudo systemctl reload polymarket-bot
+
+# 安装/更新 systemd 服务
+sudo cp deploy/systemd/polymarket-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable polymarket-bot
 ```
 
 ---
@@ -114,18 +135,53 @@ polymarket-trading-bot/
 ├── .env.example          # 配置模板
 ├── Dockerfile            # Docker 构建文件
 ├── docker-compose.yml    # 容器编排配置
-├── bot_continuous.py     # 主入口（实盘连续运行）
-├── bot_simulate.py       # 模拟模式入口
-├── bot_runner.py         # 单次运行入口
-├── web_dashboard.py      # Web 监控面板
+├── bot_runner.py         # 主入口：主循环 + 周期协调
+├── bot_sniper.py         # Sniper 策略入口
 ├── lib/                  # 核心库
 │   ├── config.py         # 配置管理
-│   ├── strategy.py       # 交易策略
-│   ├── risk_manager.py   # 风控管理
-│   └── polymarket_client.py  # API 客户端
+│   ├── decision.py       # 交易决策层
+│   ├── direction_scorer.py  # 9维度 BTC 方向评分
+│   ├── hedge_formula.py  # 精确对冲公式
+│   ├── bot_state.py      # 状态持久化
+│   ├── polymarket_client.py # API 客户端
+│   ├── data_persistence.py  # SQLite 数据存储
+│   └── trading_engine.py # 订单执行引擎
+├── tests/                # 单元测试
+├── deploy/               # 部署脚本和配置
+│   ├── systemd/          # systemd 服务文件
+│   └── deploy.sh         # 手动部署脚本
 ├── logs/                 # 日志目录（自动创建）
 └── .github/workflows/
     └── deploy.yml        # CI/CD 流水线
+```
+
+---
+
+## 故障排除
+
+### Docker 容器名冲突
+
+如果看到如下错误：
+
+```
+Error response from daemon: Conflict. The container name "/polymarket-bot" is already in use
+```
+
+解决方法：
+
+```bash
+# 手动清理旧容器
+docker rm -f polymarket-bot
+docker-compose up -d bot
+```
+
+systemd 服务已内置自动清理（`ExecStartPre=-docker compose down --remove-orphans`），
+更新服务文件后重启即可：
+
+```bash
+sudo cp deploy/systemd/polymarket-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart polymarket-bot
 ```
 
 ---

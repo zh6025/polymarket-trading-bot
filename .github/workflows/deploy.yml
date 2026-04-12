@@ -79,22 +79,30 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $USER@$HOST << 'ENDSSH'
             set -e
             echo "📂 Navigating to project directory..."
-            cd ~/polymarket-trading-bot
+            cd /opt/polymarket-bot
 
             echo "📥 Pulling latest code from main..."
             git pull origin main
 
             echo "🐳 Rebuilding Docker image..."
-            docker-compose build --no-cache bot
+            docker compose build --no-cache bot
 
-            echo "🔄 Restarting bot container..."
-            docker-compose up -d --force-recreate bot
+            echo "🔄 Stopping old containers..."
+            docker compose down --remove-orphans || true
+
+            echo "🚀 Starting bot container..."
+            docker compose up -d --force-recreate bot
+
+            echo "📋 Installing/updating systemd service..."
+            sudo cp deploy/systemd/polymarket-bot.service /etc/systemd/system/
+            sudo systemctl daemon-reload
+            sudo systemctl enable polymarket-bot
 
             echo "🧹 Cleaning up old images..."
             docker image prune -f
 
             echo "📊 Bot status:"
-            docker-compose ps
+            docker compose ps
 
             echo "✅ Deployment complete!"
           ENDSSH
