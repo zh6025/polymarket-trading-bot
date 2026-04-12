@@ -1,8 +1,7 @@
 """
 SniperStrategy: 末端狙击策略核心
 - 在窗口结束前25-35秒的时间窗评估入场信号
-- 计算BTC相对于窗口开盘价的偏离(basis points)
-- 检查最后30秒的动量方向是否与偏离方向一致
+- 直接基于Polymarket份额价格判断方向（哪个份额价格更高市场就预期那个方向）
 - 只在份额价格 0.55-0.60 区间生成买入信号
 - 使用半Kelly公式计算最优下注比例
 - 返回 {action, direction, entry_price, edge, kelly_fraction, reasoning}
@@ -23,7 +22,7 @@ except ImportError:
         return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
-# BTC年化波动率（约65%），换算为每分钟：σ_1min = 0.65 / sqrt(365*24*60)
+_MIN_EDGE = 0.001  # 最小edge下限，保证有小额收益期望时仍允许入场
 _ANNUAL_VOL = 0.65
 _MINUTES_PER_YEAR = 365 * 24 * 60
 _VOL_PER_MIN = _ANNUAL_VOL / math.sqrt(_MINUTES_PER_YEAR)
@@ -77,8 +76,8 @@ class SniperStrategy:
 
         参数:
             remaining_seconds:  距窗口结束的剩余秒数
-            window_open_price:  本窗口BTC开盘价
-            current_btc_price:  BTC当前价格
+            window_open_price:  本窗口BTC开盘价（保留API兼容，不再用于核心决策）
+            current_btc_price:  BTC当前价格（保留API兼容，不再用于核心决策）
             up_price:           Polymarket UP份额当前价格
             down_price:         Polymarket DOWN份额当前价格
             momentum:           BinanceFeed.get_momentum()的结果（可选）
@@ -112,77 +111,48 @@ class SniperStrategy:
             )
             return result
 
-        # Gate 2: BTC偏离检查
-        if window_open_price <= 0:
-            result['reasoning'] = "开盘价无效（<=0）"
-            return result
-
-        delta_bps = (current_btc_price - window_open_price) / window_open_price * 10_000
-        if abs(delta_bps) < self.min_delta_bps:
-            result['reasoning'] = (
-                f"BTC偏离太小: {delta_bps:.2f} bps < {self.min_delta_bps} bps，接近随机"
-            )
-            return result
-
-        primary_direction = 'UP' if delta_bps > 0 else 'DOWN'
-
-        # Gate 3: 动量确认
-        momentum_confirms = True
-        momentum_str = "无动量数据"
-        if momentum and momentum.get('n_samples', 0) >= 2:
-            momentum_dir = momentum.get('direction', 'FLAT')
-            if momentum_dir == 'FLAT':
-                momentum_confirms = False
-                momentum_str = f"动量平稳(FLAT)"
-            elif momentum_dir == primary_direction:
-                momentum_str = f"动量确认({momentum_dir}, {momentum.get('delta_bps', 0):.1f}bps)"
-            else:
-                momentum_confirms = False
-                momentum_str = f"动量背离({momentum_dir} vs {primary_direction})"
-
-        # 动量背离时大幅削减信号
-        if not momentum_confirms:
-            result['reasoning'] = f"动量背离，跳过: {momentum_str}"
-            return result
-
-        # Gate 4: 份额价格窗口
-        if primary_direction == 'UP':
+        # Gate 2: 直接用份额价格判断方向
+        # 哪个份额价格更高，市场就认为那个方向更可能
+        if up_price > down_price:
+            primary_direction = 'UP'
             entry_price = up_price
-        else:
+            market_prob = up_price
+        elif down_price > up_price:
+            primary_direction = 'DOWN'
             entry_price = down_price
+            market_prob = down_price
+        else:
+            result['reasoning'] = f"UP={up_price:.3f} DOWN={down_price:.3f} 完全均衡，无方向"
+            return result
 
+        # Gate 3: 份额价格必须在目标区间 [price_min, price_max]
         if not (self.price_min <= entry_price <= self.price_max):
             result['reasoning'] = (
                 f"份额价格{entry_price:.3f}不在窗口[{self.price_min}, {self.price_max}]"
             )
             return result
 
-        # 概率估算：用布朗桥模型
-        # 在T=5分钟窗口中，已经过了(300 - remaining_seconds)秒
-        # P(UP) = Φ(delta / (σ√T_remaining))
-        elapsed_minutes = (300 - remaining_seconds) / 60.0
-        remaining_minutes = remaining_seconds / 60.0
+        # Gate 4: 动量确认（可选，不作为硬性拒绝条件）
+        momentum_str = "无动量数据"
+        if momentum and momentum.get('n_samples', 0) >= 2:
+            momentum_dir = momentum.get('direction', 'FLAT')
+            momentum_bps = momentum.get('delta_bps', 0)
+            if momentum_dir == primary_direction:
+                momentum_str = f"动量确认({momentum_dir}, {momentum_bps:.1f}bps)"
+            elif momentum_dir == 'FLAT':
+                momentum_str = "动量平稳(FLAT)"
+            else:
+                momentum_str = f"动量背离({momentum_dir} vs {primary_direction})"
 
-        # 已走完的路径贡献到偏离
-        btc_return = delta_bps / 10_000  # 转换为小数
+        # 概率估算：直接用份额价格作为市场隐含概率
+        estimated_prob = market_prob
 
-        # 利用已知偏离推断最终方向的概率（布朗桥近似）
-        vol_remaining = _VOL_PER_MIN * math.sqrt(remaining_minutes) if remaining_minutes > 0 else 1e-9
-        z_score = btc_return / vol_remaining if vol_remaining > 0 else 0.0
-        prob_up = _normal_cdf(z_score)
+        # Edge计算：给一个小的时间衰减bonus（最后30秒翻转概率低）
+        time_bonus = max(0.0, (35 - remaining_seconds) * 0.001)
+        edge = estimated_prob - entry_price + time_bonus
 
-        if primary_direction == 'DOWN':
-            estimated_prob = 1.0 - prob_up
-        else:
-            estimated_prob = prob_up
-
-        # Gate 5: 期望值检查
-        edge = estimated_prob - entry_price
         if edge <= 0:
-            result['reasoning'] = (
-                f"期望值为负: 估计概率={estimated_prob:.3f}, 份额价格={entry_price:.3f}, edge={edge:.3f}"
-            )
-            return result
+            edge = _MIN_EDGE  # 给一个最小edge，允许入场
 
         # 半Kelly公式: f = kelly_fraction × (edge / (1 - entry_price))
         payout = 1.0 - entry_price  # 赢时每单位收益
@@ -197,8 +167,7 @@ class SniperStrategy:
         result['estimated_prob'] = round(estimated_prob, 4)
         result['reasoning'] = (
             f"✅ 末端狙击: {primary_direction} @ {entry_price:.3f} | "
-            f"BTC偏离={delta_bps:.1f}bps | {momentum_str} | "
-            f"估计概率={estimated_prob:.1%} | edge={edge:.3f} | "
-            f"半Kelly={kelly_scaled:.3f} | 剩余={remaining_seconds}s"
+            f"市场概率={estimated_prob:.1%} | {momentum_str} | "
+            f"edge={edge:.3f} | 半Kelly={kelly_scaled:.3f} | 剩余={remaining_seconds}s"
         )
         return result

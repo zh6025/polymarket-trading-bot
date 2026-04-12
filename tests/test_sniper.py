@@ -121,7 +121,6 @@ class TestSniperTimeWindow:
             current_btc_price=50100,
             up_price=0.57,
             down_price=0.43,
-            momentum=make_momentum('UP'),
         )
         assert result['action'] == 'SKIP'
         assert '时间窗口' in result['reasoning']
@@ -134,7 +133,6 @@ class TestSniperTimeWindow:
             current_btc_price=50100,
             up_price=0.57,
             down_price=0.43,
-            momentum=make_momentum('UP'),
         )
         assert result['action'] == 'SKIP'
         assert '时间窗口' in result['reasoning']
@@ -144,59 +142,62 @@ class TestSniperTimeWindow:
         result = strat.evaluate(
             remaining_seconds=30,
             window_open_price=50000,
-            current_btc_price=50500,  # +10bps
+            current_btc_price=50500,
             up_price=0.57,
             down_price=0.43,
-            momentum=make_momentum('UP', delta_bps=10.0),
         )
         assert result['action'] != 'SKIP' or '时间窗口' not in result['reasoning']
 
 
 class TestSniperDeltaGate:
-    def test_skip_when_delta_too_small(self):
+    def test_btc_delta_ignored_direction_from_share_prices(self):
+        """BTC偏离不再决定方向，方向由份额价格决定"""
         strat = make_strategy(min_delta_bps=5.0)
+        # BTC几乎没动（旧逻辑会SKIP），但UP份额>DOWN份额，应该触发BUY_UP
         result = strat.evaluate(
             remaining_seconds=30,
             window_open_price=50000,
-            current_btc_price=50001,  # 0.02bps，远小于5bps
+            current_btc_price=50001,  # 仅0.02bps偏离，旧逻辑会拒绝
             up_price=0.57,
             down_price=0.43,
-            momentum=make_momentum('UP'),
         )
-        assert result['action'] == 'SKIP'
-        assert 'BTC偏离' in result['reasoning']
+        # 新逻辑：不应因为BTC偏离小而SKIP
+        assert 'BTC偏离' not in result['reasoning']
 
-    def test_pass_when_delta_sufficient(self):
+    def test_direction_comes_from_share_price(self):
+        """方向由份额价格高低决定，与BTC涨跌无关"""
         strat = make_strategy(min_delta_bps=2.0)
-        # delta = 500 / 50000 * 10000 = 100 bps
+        # BTC大幅上涨，但DOWN份额更高 → 应该买DOWN
         result = strat.evaluate(
             remaining_seconds=30,
             window_open_price=50000,
-            current_btc_price=50500,
-            up_price=0.57,
-            down_price=0.43,
-            momentum=make_momentum('UP', delta_bps=100.0),
+            current_btc_price=50500,  # BTC涨了
+            up_price=0.43,
+            down_price=0.57,  # 但市场认为DOWN更可能
         )
-        # 应该不是因为delta不足而SKIP
-        if result['action'] == 'SKIP':
-            assert 'BTC偏离' not in result['reasoning']
+        if result['action'] != 'SKIP':
+            assert result['direction'] == 'DOWN'
+            assert result['entry_price'] == 0.57
 
 
 class TestSniperMomentumGate:
-    def test_skip_when_momentum_diverges(self):
+    def test_no_skip_when_momentum_diverges(self):
+        """动量背离不再硬性拒绝，只在reasoning中记录"""
         strat = make_strategy()
         result = strat.evaluate(
             remaining_seconds=30,
             window_open_price=50000,
-            current_btc_price=50500,  # +100bps UP
-            up_price=0.57,
+            current_btc_price=50500,
+            up_price=0.57,  # UP份额更高 → 方向为UP
             down_price=0.43,
             momentum=make_momentum('DOWN', delta_bps=-50.0),  # 动量背离
         )
-        assert result['action'] == 'SKIP'
+        # 新逻辑：动量背离不导致SKIP
+        assert result['action'] == 'BUY_UP'
         assert '动量背离' in result['reasoning']
 
-    def test_pass_when_momentum_confirms(self):
+    def test_momentum_confirmation_noted_in_reasoning(self):
+        """动量确认时在reasoning中标注"""
         strat = make_strategy()
         result = strat.evaluate(
             remaining_seconds=30,
@@ -206,20 +207,20 @@ class TestSniperMomentumGate:
             down_price=0.43,
             momentum=make_momentum('UP', delta_bps=50.0),
         )
-        if result['action'] == 'SKIP':
+        if result['action'] != 'SKIP':
             assert '动量背离' not in result['reasoning']
 
 
 class TestSniperPriceWindow:
     def test_skip_when_share_price_too_low(self):
         strat = make_strategy(price_min=0.55, price_max=0.60)
+        # 两个份额价格都太低（都在0.5附近），最高的也不在[0.55, 0.60]区间
         result = strat.evaluate(
             remaining_seconds=30,
             window_open_price=50000,
             current_btc_price=50500,
-            up_price=0.40,  # 太低
-            down_price=0.60,
-            momentum=make_momentum('UP', delta_bps=100.0),
+            up_price=0.52,  # 稍高但低于price_min=0.55
+            down_price=0.48,
         )
         assert result['action'] == 'SKIP'
         assert '份额价格' in result['reasoning']
@@ -232,42 +233,38 @@ class TestSniperPriceWindow:
             current_btc_price=50500,
             up_price=0.75,  # 太高
             down_price=0.25,
-            momentum=make_momentum('UP', delta_bps=100.0),
         )
         assert result['action'] == 'SKIP'
         assert '份额价格' in result['reasoning']
 
     def test_enter_when_price_in_window(self):
         strat = make_strategy(price_min=0.55, price_max=0.60)
-        # 使用大幅偏离让概率足够高，确保edge > 0
         result = strat.evaluate(
             remaining_seconds=30,
             window_open_price=50000,
-            current_btc_price=52000,  # 大幅UP偏离
+            current_btc_price=52000,
             up_price=0.57,
             down_price=0.43,
-            momentum=make_momentum('UP', delta_bps=400.0),
         )
-        # 如果入场则方向应为UP
-        if result['action'] != 'SKIP':
-            assert result['direction'] == 'UP'
-            assert result['entry_price'] == 0.57
+        assert result['action'] == 'BUY_UP'
+        assert result['direction'] == 'UP'
+        assert result['entry_price'] == 0.57
 
 
 class TestSniperDirectionDown:
-    def test_buy_down_when_btc_negative(self):
+    def test_buy_down_when_down_price_higher(self):
+        """DOWN份额价格更高时，买DOWN"""
         strat = make_strategy(price_min=0.55, price_max=0.60)
         result = strat.evaluate(
             remaining_seconds=30,
             window_open_price=50000,
-            current_btc_price=48000,  # 大幅DOWN偏离
+            current_btc_price=48000,
             up_price=0.43,
-            down_price=0.57,
-            momentum=make_momentum('DOWN', delta_bps=-400.0),
+            down_price=0.57,  # DOWN份额更高
         )
-        if result['action'] != 'SKIP':
-            assert result['direction'] == 'DOWN'
-            assert result['entry_price'] == 0.57
+        assert result['action'] == 'BUY_DOWN'
+        assert result['direction'] == 'DOWN'
+        assert result['entry_price'] == 0.57
 
 
 class TestSniperKelly:
@@ -279,13 +276,15 @@ class TestSniperKelly:
             current_btc_price=52000,
             up_price=0.57,
             down_price=0.43,
-            momentum=make_momentum('UP', delta_bps=400.0),
         )
-        if result['action'] != 'SKIP':
-            assert result['kelly_fraction'] > 0
-            assert result['edge'] > 0
+        assert result['action'] == 'BUY_UP'
+        assert result['kelly_fraction'] > 0
+        assert result['edge'] > 0
 
-    def test_edge_equals_prob_minus_price(self):
+    def test_edge_at_least_time_bonus(self):
+        """edge = estimated_prob - entry_price + time_bonus
+        When entry_price == estimated_prob (share price is both), edge = time_bonus.
+        For remaining_seconds=30: time_bonus = (35-30)*0.001 = 0.005"""
         strat = make_strategy()
         result = strat.evaluate(
             remaining_seconds=30,
@@ -293,22 +292,22 @@ class TestSniperKelly:
             current_btc_price=52000,
             up_price=0.57,
             down_price=0.43,
-            momentum=make_momentum('UP', delta_bps=400.0),
         )
-        if result['action'] != 'SKIP':
-            expected_edge = result['estimated_prob'] - result['entry_price']
-            assert abs(result['edge'] - expected_edge) < 0.001
+        assert result['action'] == 'BUY_UP'
+        # estimated_prob == entry_price == 0.57, so edge = 0 + time_bonus = 0.005
+        assert result['edge'] >= 0.005
 
 
 class TestSniperInvalidInputs:
-    def test_zero_open_price(self):
+    def test_equal_up_down_prices_skips(self):
+        """UP和DOWN完全相等时无方向，应SKIP"""
         strat = make_strategy()
         result = strat.evaluate(
             remaining_seconds=30,
-            window_open_price=0,  # 无效
+            window_open_price=50000,
             current_btc_price=50000,
-            up_price=0.57,
-            down_price=0.43,
+            up_price=0.50,
+            down_price=0.50,
         )
         assert result['action'] == 'SKIP'
-        assert '开盘价无效' in result['reasoning']
+        assert '均衡' in result['reasoning']

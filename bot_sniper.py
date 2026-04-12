@@ -176,21 +176,17 @@ class SniperBot:
 
         log_info(f"📊 价格: UP={up_price:.3f} DOWN={down_price:.3f}")
 
-        # 8. 获取窗口开盘价（用BinanceFeed中最早的历史数据估算，或通过Polymarket开盘）
-        window_open_btc_price = self._estimate_window_open_price(window_open_ts, btc_price)
-        log_info(f"🕐 估算窗口开盘BTC价: {window_open_btc_price:.2f}")
-
-        # 9. 获取动量
+        # 8. 获取动量
         momentum = self.feed.get_momentum(seconds=self.strategy.momentum_secs)
         log_info(f"📈 动量({self.strategy.momentum_secs}s): "
                  f"方向={momentum['direction']} "
                  f"delta_bps={momentum['delta_bps']:.1f} "
                  f"samples={momentum['n_samples']}")
 
-        # 10. 评估狙击信号
+        # 9. 评估狙击信号
         signal = self.strategy.evaluate(
             remaining_seconds=remaining_seconds,
-            window_open_price=window_open_btc_price,
+            window_open_price=btc_price,
             current_btc_price=btc_price,
             up_price=up_price,
             down_price=down_price,
@@ -201,7 +197,7 @@ class SniperBot:
         if signal['action'] == 'SKIP':
             return
 
-        # 11. 计算下注规模（用Kelly公式调整基础下注）
+        # 10. 计算下注规模（用Kelly公式调整基础下注）
         base_bet = self.config.bet_size_usdc
         kelly = signal['kelly_fraction']
         # kelly_fraction 已经是半Kelly缩放后的比例（相对于资金），用它来调整下注
@@ -219,7 +215,7 @@ class SniperBot:
                  f"edge={edge:.3f} "
                  f"估计概率={estimated_prob:.1%}")
 
-        # 12. 执行下单
+        # 11. 执行下单
         if not self.config.dry_run and self.config.trading_enabled:
             try:
                 # 找到对应方向的token_id
@@ -242,38 +238,12 @@ class SniperBot:
         else:
             log_info(f"🔬 DRY-RUN: {direction} @ {entry_price:.3f} x {bet_size:.2f} USDC（跳过真实下单）")
 
-        # 13. 记录入场，防止本窗口重复入场
+        # 12. 记录入场，防止本窗口重复入场
         self._last_entered_window_ts = window_open_ts
         self.state.record_trade(pnl=0.0)  # 真实盈亏在结算后更新
         self.state.save()
         log_info(f"💾 入场记录已保存 | 今日交易={self.state.daily_trade_count} "
                  f"今日PnL=${self.state.daily_pnl:.2f}")
-
-    def _estimate_window_open_price(self, window_open_ts: Optional[int],
-                                    current_price: float) -> float:
-        """
-        估算窗口开盘时的BTC价格。
-        优先从历史buffer中取最接近窗口开始时间的价格；
-        若历史数据不足，回退到当前价格（保守估计）。
-        """
-        if window_open_ts is None:
-            return current_price
-
-        # 在历史buffer中找时间最接近window_open_ts的价格
-        best_price = current_price
-        best_diff = float('inf')
-        for ts, price in self.feed._history:
-            diff = abs(ts - window_open_ts)
-            if diff < best_diff:
-                best_diff = diff
-                best_price = price
-
-        # 如果历史中最近的价格与开盘时间相差超过60秒，说明机器人是在窗口中途启动的
-        # 此时用当前价格会高估/低估偏离，保守处理：若差距太大则用当前价
-        if best_diff > 120:
-            log_warn(f"历史数据距开盘时间差{best_diff:.0f}s > 120s，使用当前价格作为开盘价估算")
-            return current_price
-        return best_price
 
 
 def main():
