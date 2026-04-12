@@ -39,8 +39,8 @@ newgrp docker
 sudo apt install docker-compose -y
 
 # 克隆项目
-git clone https://github.com/zh6025/polymarket-trading-bot.git
-cd polymarket-trading-bot
+git clone https://github.com/zh6025/polymarket-trading-bot.git /opt/polymarket-bot
+cd /opt/polymarket-bot
 
 # 配置环境变量
 cp .env.example .env
