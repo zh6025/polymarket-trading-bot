@@ -87,7 +87,10 @@ jobs:
             echo "🐳 Rebuilding Docker image..."
             docker-compose build --no-cache bot
 
-            echo "🔄 Restarting bot container..."
+            echo "🔄 Stopping old containers..."
+            docker-compose down --remove-orphans || true
+
+            echo "🚀 Starting bot container..."
             docker-compose up -d --force-recreate bot
 
             echo "🧹 Cleaning up old images..."
