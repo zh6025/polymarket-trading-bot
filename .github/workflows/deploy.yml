@@ -42,8 +42,8 @@ jobs:
           POLLING_INTERVAL: "60000"
           LOG_LEVEL: info
         run: |
-          echo "Running bot_runner.py in dry-run mode..."
-          timeout 30 python bot_runner.py || true
+          echo "Running bot_sniper.py in dry-run mode..."
+          timeout 30 python bot_sniper.py || true
           echo "✅ Dry-run test completed"
 
       - name: 🐳 Build Docker image
