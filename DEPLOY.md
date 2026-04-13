@@ -52,11 +52,11 @@ nano .env  # 填入你的 API Key 等配置
 ## 第三步：启动机器人
 
 ```bash
-# 模拟模式（推荐先测试）
-docker-compose --profile simulate up -d
+# 模拟模式（推荐先测试，DRY_RUN=true 不下真实订单）
+DRY_RUN=true docker-compose up -d bot
 
 # 查看日志
-docker-compose logs -f bot-simulate
+docker-compose logs -f bot
 
 # 确认无误后，切换到实盘模式
 # 编辑 .env，将 DRY_RUN=false
@@ -97,9 +97,6 @@ docker-compose down --remove-orphans && docker-compose up -d bot
 # 停止机器人
 docker-compose down
 
-# 启动 Web 监控面板（端口 8501）
-docker-compose --profile dashboard up -d
-
 # 更新代码并重启
 git pull origin main && docker-compose down --remove-orphans && docker-compose up -d --build bot
 ```
@@ -135,17 +132,14 @@ polymarket-trading-bot/
 ├── .env.example          # 配置模板
 ├── Dockerfile            # Docker 构建文件
 ├── docker-compose.yml    # 容器编排配置
-├── bot_runner.py         # 主入口：主循环 + 周期协调
-├── bot_sniper.py         # Sniper 策略入口
+├── bot_sniper.py         # 主入口：末端狙击机器人
 ├── lib/                  # 核心库
 │   ├── config.py         # 配置管理
-│   ├── decision.py       # 交易决策层
-│   ├── direction_scorer.py  # 9维度 BTC 方向评分
-│   ├── hedge_formula.py  # 精确对冲公式
+│   ├── sniper_strategy.py   # 末端狙击策略核心
 │   ├── bot_state.py      # 状态持久化
 │   ├── polymarket_client.py # API 客户端
-│   ├── data_persistence.py  # SQLite 数据存储
-│   └── trading_engine.py # 订单执行引擎
+│   ├── binance_feed.py   # Binance BTC 实时价格
+│   └── utils.py          # 日志 + 工具
 ├── tests/                # 单元测试
 ├── deploy/               # 部署脚本和配置
 │   ├── systemd/          # systemd 服务文件
