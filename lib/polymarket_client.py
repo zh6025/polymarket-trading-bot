@@ -11,7 +11,7 @@ try:
     from py_clob_client.clob_types import ApiCreds, OrderArgs
     from py_clob_client.order_builder.constants import BUY, SELL
     _PY_CLOB_AVAILABLE = True
-except Exception as _e:  # pragma: no cover - import guard
+except ImportError as _e:  # pragma: no cover - import guard
     ClobClient = None  # type: ignore
     ApiCreds = None  # type: ignore
     OrderArgs = None  # type: ignore
