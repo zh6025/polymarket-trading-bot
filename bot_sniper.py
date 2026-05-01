@@ -5,10 +5,11 @@ bot_sniper.py — 末端狙击机器人
 结合Binance实时价格动量确认，使用半Kelly公式计算下注比例。
 """
 import asyncio
+import json
 import logging
 import sys
 import time
-from typing import Optional
+from typing import List, Optional
 
 from lib.config import Config
 from lib.utils import log_info, log_error, log_warn
@@ -38,6 +39,32 @@ def _parse_window_open_ts(event: dict) -> Optional[int]:
         return ts
     except (ValueError, IndexError):
         return None
+
+
+def _parse_outcome_prices(raw, default: Optional[List[float]] = None) -> List[float]:
+    """
+    解析 Polymarket Gamma API 返回的 outcomePrices。
+    该字段可能是：
+      - list: ["0.52", "0.48"] 或 [0.52, 0.48]
+      - JSON 字符串: '["0.52","0.48"]'
+      - None / 空 / 非法值
+    任意元素无法转 float 时，回退为默认值。
+    """
+    if default is None:
+        default = [0.5, 0.5]
+    if raw is None:
+        return list(default)
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            return list(default)
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return list(default)
+    try:
+        return [float(x) for x in raw]
+    except (ValueError, TypeError):
+        return list(default)
 
 
 class SniperBot:
@@ -120,11 +147,15 @@ class SniperBot:
                 if _up_m is None and _down_m is None and len(_markets) >= 2:
                     _up_m, _down_m = _markets[0], _markets[1]
                 if _up_m:
-                    up_str = f"{float(_up_m.get('outcomePrices', ['0.5'])[0]):.3f}"
+                    _up_prices = _parse_outcome_prices(_up_m.get('outcomePrices'))
+                    if _up_prices:
+                        up_str = f"{_up_prices[0]:.3f}"
                 if _down_m:
-                    down_str = f"{float(_down_m.get('outcomePrices', ['0.5'])[0]):.3f}"
-            except Exception:
-                pass
+                    _down_prices = _parse_outcome_prices(_down_m.get('outcomePrices'))
+                    if _down_prices:
+                        down_str = f"{_down_prices[0]:.3f}"
+            except Exception as e:
+                log_warn(f"解析 outcomePrices 失败: {e}")
             log_info(f"⏳ 等待入场窗口 (剩余{remaining_seconds}s) | BTC={btc_price:.2f} | UP份额={up_str} DOWN份额={down_str}")
             return
 
@@ -154,7 +185,6 @@ class SniperBot:
         up_market = None
         down_market = None
         for m in active_markets:
-            outcome = m.get('outcomePrices', ['0.5', '0.5'])
             slug_lower = m.get('groupItemTitle', '').upper()
             if 'UP' in slug_lower:
                 up_market = m
@@ -168,11 +198,11 @@ class SniperBot:
             log_warn("只找到1个子市场，跳过本周期")
             return
 
-        up_prices = up_market.get('outcomePrices', ['0.5', '0.5']) if up_market else ['0.5', '0.5']
-        down_prices = down_market.get('outcomePrices', ['0.5', '0.5']) if down_market else ['0.5', '0.5']
+        up_prices = _parse_outcome_prices(up_market.get('outcomePrices')) if up_market else [0.5, 0.5]
+        down_prices = _parse_outcome_prices(down_market.get('outcomePrices')) if down_market else [0.5, 0.5]
 
-        up_price = float(up_prices[0]) if up_prices else 0.5
-        down_price = float(down_prices[0]) if down_prices else 0.5
+        up_price = up_prices[0] if up_prices else 0.5
+        down_price = down_prices[0] if down_prices else 0.5
 
         log_info(f"📊 价格: UP={up_price:.3f} DOWN={down_price:.3f}")
 
