@@ -225,13 +225,23 @@ class SniperBot:
                     log_error(f"未找到 {direction} 方向的token_id，跳过")
                     return
 
+                # py_clob_client 的 size 单位是「股数」（shares），不是 USDC。
+                # shares = notional_USDC / price
+                if entry_price <= 0:
+                    log_error(f"非法 entry_price={entry_price}，跳过下单")
+                    return
+                shares = round(bet_size / entry_price, 2)
+
                 self.client.place_order(
                     token_id=token_id,
                     side='buy',
                     price=entry_price,
-                    size=bet_size,
+                    size=shares,
                 )
-                log_info(f"✅ 订单已提交: {direction} @ {entry_price:.3f} x {bet_size:.2f}")
+                log_info(
+                    f"✅ 订单已提交: {direction} @ {entry_price:.3f} "
+                    f"shares={shares:.2f} (~{bet_size:.2f} USDC)"
+                )
             except Exception as e:
                 log_error(f"下单失败: {e}")
                 return
@@ -255,7 +265,33 @@ def main():
         state = BotState.load()
         state.trading_enabled = config.trading_enabled
 
-        client = PolymarketClient()
+        client = PolymarketClient(
+            host=config.clob_host,
+            chain_id=config.chain_id,
+            private_key=config.private_key or None,
+            funder=config.funder or None,
+            signature_type=config.signature_type,
+            api_key=config.clob_api_key or None,
+            api_secret=config.clob_api_secret or None,
+            api_passphrase=config.clob_api_passphrase or None,
+        )
+
+        # 实盘前自检：验证 PRIVATE_KEY / FUNDER / SIGNATURE_TYPE / API creds 组合
+        if config.trading_enabled and not config.dry_run:
+            try:
+                status = client.get_wallet_status()
+                log_info(f"🔐 钱包自检: {status}")
+                if not status.get('ok'):
+                    log_error(
+                        "❌ 钱包/签名自检失败，请核对 SIGNATURE_TYPE 与 FUNDER："
+                        " 0=EOA, 1=POLY_PROXY (FUNDER=Proxy地址),"
+                        " 2=POLY_GNOSIS_SAFE (FUNDER=Safe地址)"
+                    )
+                    sys.exit(2)
+            except Exception as e:
+                log_error(f"❌ 无法初始化 CLOB 交易客户端: {e}")
+                sys.exit(2)
+
         feed = BinanceFeed()
         strategy = SniperStrategy(
             entry_secs=config.sniper_entry_secs,

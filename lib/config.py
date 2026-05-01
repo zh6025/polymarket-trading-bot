@@ -3,6 +3,29 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _to_bool(value) -> bool:
+    """Tolerant boolean parser.
+
+    Handles the common .env pitfall where a user writes
+    `TRADING_ENABLED=true#注释` (no space before the #). python-dotenv reads
+    that as the literal string `true#注释`, which a strict `== 'true'` check
+    would reject. We split on whitespace and `#` and look at the first token.
+    """
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    s = str(value).strip()
+    # cut off inline comment
+    for sep in ('#',):
+        if sep in s:
+            s = s.split(sep, 1)[0].strip()
+    # take first whitespace-separated token
+    s = s.split()[0] if s.split() else ''
+    return s.lower() in ('true', '1', 'yes', 'on')
+
+
 class Config:
     def __init__(self):
         self.api_key = self.get_env_variable('API_KEY', required=False, default='demo-key')
@@ -13,14 +36,14 @@ class Config:
         self.trade_both_outcomes = self.get_env_variable('TRADE_BOTH_OUTCOMES', required=False, default='true').lower() == 'true'
         self.daily_loss_limit = float(self.get_env_variable('DAILY_LOSS_LIMIT', required=False, default='1000'))
         self.max_position_size = float(self.get_env_variable('MAX_POSITION_SIZE', required=False, default='5000'))
-        self.dry_run = self.get_env_variable('DRY_RUN', required=False, default='true').lower() == 'true'
+        self.dry_run = _to_bool(self.get_env_variable('DRY_RUN', required=False, default='true'))
         self.polling_interval = int(self.get_env_variable('POLLING_INTERVAL', required=False, default='60000'))
 
         # 策略选择
         self.strategy = self.get_env_variable('STRATEGY', required=False, default='imbalance')
 
         # 安全开关：必须显式设为 true 才能真实交易
-        self.trading_enabled = self.get_env_variable('TRADING_ENABLED', required=False, default='false').lower() == 'true'
+        self.trading_enabled = _to_bool(self.get_env_variable('TRADING_ENABLED', required=False, default='false'))
 
         # 方向评分器配置
         self.scorer_enabled = self.get_env_variable('SCORER_ENABLED', required=False, default='true').lower() == 'true'
@@ -55,6 +78,29 @@ class Config:
 
         # 下注规模（USDC）
         self.bet_size_usdc = float(self.get_env_variable('BET_SIZE_USDC', required=False, default='3.0'))
+
+        # ---- Polymarket CLOB 实盘交易凭证 ----
+        # CLOB 主机（一般无需修改）
+        self.clob_host = self.get_env_variable('CLOB_HOST', required=False, default='https://clob.polymarket.com')
+        # 链 ID：Polygon 主网 137
+        self.chain_id = int(self.get_env_variable('CHAIN_ID', required=False, default='137'))
+        # 用于签名订单的私钥（控制 EOA 钱包）
+        self.private_key = self.get_env_variable('PRIVATE_KEY', required=False, default='')
+        # 资金钱包地址：
+        #   - signature_type=0 (EOA)            -> 留空或填 EOA 地址
+        #   - signature_type=1 (POLY_PROXY)     -> Polymarket 网站显示的 Proxy 地址
+        #   - signature_type=2 (POLY_GNOSIS_SAFE) -> Gnosis Safe 地址
+        self.funder = self.get_env_variable('FUNDER', required=False, default='')
+        # 签名类型：0=EOA, 1=POLY_PROXY, 2=POLY_GNOSIS_SAFE
+        _sig = self.get_env_variable('SIGNATURE_TYPE', required=False, default='1')
+        try:
+            self.signature_type = int(_sig)
+        except ValueError:
+            self.signature_type = 1
+        # 可选：直接提供 L2 API creds（不提供则首次启动自动派生）
+        self.clob_api_key = self.get_env_variable('CLOB_API_KEY', required=False, default='')
+        self.clob_api_secret = self.get_env_variable('CLOB_API_SECRET', required=False, default='')
+        self.clob_api_passphrase = self.get_env_variable('CLOB_API_PASSPHRASE', required=False, default='')
 
         # ---- 末端狙击策略配置 ----
         self.sniper_entry_secs = int(self.get_env_variable('SNIPER_ENTRY_SECS', required=False, default='30'))
