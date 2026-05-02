@@ -111,22 +111,6 @@ class TestBotStateCanTrade:
         assert ok is False
         assert self.state.circuit_breaker is True
 
-    def test_daily_trade_limit(self):
-        self.state.trading_enabled = True
-        self.state.daily_trade_count = 20
-        ok, reason = self.state.can_trade(daily_trade_limit=20)
-        assert ok is False
-        assert '次数' in reason
-
-    def test_daily_trade_limit_disabled(self):
-        """DAILY_TRADE_LIMIT<=0 时不限交易次数"""
-        self.state.trading_enabled = True
-        self.state.daily_trade_count = 9999
-        ok, _ = self.state.can_trade(daily_trade_limit=0)
-        assert ok is True
-        ok, _ = self.state.can_trade(daily_trade_limit=-1)
-        assert ok is True
-
     def test_consecutive_loss_limit(self):
         self.state.trading_enabled = True
         self.state.consecutive_losses = 3

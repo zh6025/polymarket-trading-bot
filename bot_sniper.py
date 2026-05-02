@@ -297,7 +297,6 @@ class SniperBot:
         # 6. 检查风控
         can, reason = self.state.can_trade(
             daily_loss_limit=self.config.daily_loss_limit_usdc,
-            daily_trade_limit=self.config.daily_trade_limit,
             consec_loss_limit=self.config.consecutive_loss_limit,
         )
         if not can:

@@ -64,7 +64,6 @@ class Config:
 
         # 风控配置
         self.daily_loss_limit_usdc = float(self.get_env_variable('DAILY_LOSS_LIMIT_USDC', required=False, default='20'))
-        self.daily_trade_limit = int(self.get_env_variable('DAILY_TRADE_LIMIT', required=False, default='20'))
         self.consecutive_loss_limit = int(self.get_env_variable('CONSECUTIVE_LOSS_LIMIT', required=False, default='3'))
 
         # 时间窗口配置（秒）
