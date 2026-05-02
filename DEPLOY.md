@@ -91,14 +91,17 @@ docker-compose ps
 # 查看实时日志
 docker-compose logs -f bot
 
-# 重启机器人（推荐：先 down 再 up，避免容器名冲突）
+# 重启机器人（仅复用已有镜像，不会拾取代码改动）
 docker-compose down --remove-orphans && docker-compose up -d bot
 
 # 停止机器人
 docker-compose down
 
-# 更新代码并重启
+# 更新代码并重启（必须带 --build，否则会继续跑旧镜像里的旧代码）
 git pull origin main && docker-compose down --remove-orphans && docker-compose up -d --build bot
+
+# 强制重建镜像（怀疑跑的是旧代码时使用，例如日志里出现已经在仓库中删除的提示文案）
+docker-compose build --no-cache bot && docker-compose up -d --force-recreate bot
 ```
 
 ### systemd 管理（服务器已安装服务时）
