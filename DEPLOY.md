@@ -104,21 +104,28 @@ git pull origin main && docker-compose down --remove-orphans && docker-compose u
 docker-compose build --no-cache bot && docker-compose up -d --force-recreate bot
 
 # 一键彻底清掉旧机器人（停服务 + 删容器 + 删旧镜像 + 拉代码 + 无缓存重建 + 启动）
-# 若提示 "deploy/force-redeploy.sh: No such file or directory"，说明本地代码过旧，
-# 先用下面这条 bootstrap 命令拉取最新脚本再执行。
-sudo bash deploy/force-redeploy.sh
-
-# Bootstrap：服务器代码过旧、还没有 force-redeploy.sh 时一次性拉新代码并执行
+# 推荐：直接复制下面这一整段执行，不依赖仓库里是否已经存在 force-redeploy.sh，
+# 适用于服务器代码过旧、脚本还没同步过来的情况。
 cd /opt/polymarket-bot \
   && sudo git fetch origin main \
   && sudo git reset --hard origin/main \
-  && sudo bash deploy/force-redeploy.sh
+  && (sudo systemctl stop polymarket-bot 2>/dev/null || true) \
+  && sudo docker compose down --remove-orphans --rmi local || true \
+  && sudo docker rm -f polymarket-bot 2>/dev/null || true \
+  && sudo docker image prune -f \
+  && sudo docker compose build --no-cache bot \
+  && sudo docker compose up -d --force-recreate bot \
+  && sudo docker compose ps
+
+# 若服务器上已经有 deploy/force-redeploy.sh，可以改用脚本（效果等价）
+sudo bash deploy/force-redeploy.sh
 ```
 
 > 如果日志里仍然出现已从仓库删除的中文提示（例如 `只找到1个子市场，跳过本周期`），
-> 说明容器跑的是旧镜像。直接运行 `deploy/force-redeploy.sh` 即可一次性清干净并重建。
-> 若服务器上根本没有该脚本（报 `No such file or directory`），改用上面的
-> bootstrap 命令：先 `git fetch + reset --hard origin/main` 拉到最新代码，再执行。
+> 说明容器跑的是旧镜像。优先使用上面的一键命令彻底清干净并重建；
+> 当报 `deploy/force-redeploy.sh: No such file or directory` 时，
+> 说明仓库里的脚本还没拉到本机——继续使用上面那一整段命令即可，不要单独执行
+> `sudo bash deploy/force-redeploy.sh`。
 
 ### systemd 管理（服务器已安装服务时）
 
