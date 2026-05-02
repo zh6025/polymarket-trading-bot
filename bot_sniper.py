@@ -7,9 +7,10 @@ bot_sniper.py — 末端狙击机器人
 import asyncio
 import json
 import logging
+import re
 import sys
 import time
-from typing import List, Optional
+from typing import Any, List, Optional, Tuple
 
 from lib.config import Config
 from lib.utils import log_info, log_error, log_warn
@@ -67,6 +68,111 @@ def _parse_outcome_prices(raw, default: Optional[List[float]] = None) -> List[fl
         return list(default)
 
 
+def _parse_str_list(raw: Any) -> List[str]:
+    """
+    解析 Polymarket gamma API 中常以 JSON 字符串形式返回的字符串数组字段，
+    例如 ``clobTokenIds`` / ``outcomes``。
+
+    支持：
+      - list/tuple: ["a", "b"]
+      - JSON 字符串: '["a","b"]'
+      - None / 空 / 非法值 → []
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            return []
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [str(x) for x in raw]
+
+
+# 用于"整词匹配"的正则（避免 "UPDOWN" 误命中 "UP"）
+_UP_TOKEN_RE = re.compile(r'\bUP\b')
+_DOWN_TOKEN_RE = re.compile(r'\bDOWN\b')
+
+
+def _market_label(m: dict) -> str:
+    """把市场的多个标识字段拼成一个大写字符串，供关键字匹配。"""
+    parts: List[str] = []
+    for k in ('groupItemTitle', 'question', 'slug'):
+        v = m.get(k)
+        if isinstance(v, str) and v:
+            parts.append(v)
+    outcomes = _parse_str_list(m.get('outcomes'))
+    parts.extend(outcomes)
+    # slug 用 '-' 分隔；统一替换成空格以便整词匹配
+    return ' '.join(parts).replace('-', ' ').upper()
+
+
+def _classify_up_down(markets: List[dict]) -> Tuple[Optional[dict], Optional[dict]]:
+    """
+    在 event['markets'] 列表中识别 UP / DOWN 子市场。
+
+    优先级：
+      1. ``groupItemTitle`` 等价于 'UP' / 'DOWN'（最稳定的官方信号）
+      2. ``question`` / ``slug`` / ``outcomes`` 中以整词形式包含 UP 或 DOWN，
+         且不同时包含两个（避免事件级 "Up or Down" 文案误判）
+      3. 仍未识别时按位置回退（前两个子市场依次作为 UP/DOWN）
+
+    返回 (up_market, down_market)，单边缺失时仍尽量补齐。
+    """
+    up: Optional[dict] = None
+    down: Optional[dict] = None
+
+    # 1. groupItemTitle 精确匹配
+    for m in markets:
+        title = (m.get('groupItemTitle') or '').strip().upper()
+        if title == 'UP' and up is None:
+            up = m
+        elif title == 'DOWN' and down is None:
+            down = m
+
+    # 2. 多字段整词关键字匹配
+    if up is None or down is None:
+        for m in markets:
+            if m is up or m is down:
+                continue
+            label = _market_label(m)
+            has_up = bool(_UP_TOKEN_RE.search(label))
+            has_down = bool(_DOWN_TOKEN_RE.search(label))
+            # 同时包含 UP 和 DOWN 的市场（如事件级文案 "Up or Down"）不参与判定
+            if has_up and not has_down and up is None:
+                up = m
+            elif has_down and not has_up and down is None:
+                down = m
+
+    # 3. 位置回退：补齐单边缺失，或双缺失时取前两个
+    if up is None and down is None and len(markets) >= 2:
+        return markets[0], markets[1]
+    if up is None and down is not None:
+        rest = [m for m in markets if m is not down]
+        if rest:
+            up = rest[0]
+    elif down is None and up is not None:
+        rest = [m for m in markets if m is not up]
+        if rest:
+            down = rest[0]
+
+    return up, down
+
+
+def _market_summary_for_log(m: dict) -> dict:
+    """提取一个子市场的关键标识字段供 diagnostic 日志使用（控制体积）。"""
+    return {
+        'groupItemTitle': m.get('groupItemTitle'),
+        'question': (m.get('question') or '')[:120],
+        'slug': m.get('slug'),
+        'outcomes': _parse_str_list(m.get('outcomes')),
+        'has_outcomePrices': m.get('outcomePrices') is not None,
+        'acceptingOrders': m.get('acceptingOrders'),
+        'closed': m.get('closed'),
+    }
+
+
 class SniperBot:
     """末端狙击机器人主控"""
 
@@ -80,6 +186,27 @@ class SniperBot:
 
         # 每个窗口只允许入场1次
         self._last_entered_window_ts: Optional[int] = None
+        # 仅在第一次回退到位置识别时打印一次结构 diagnostic
+        self._diagnostic_logged: bool = False
+
+    def _log_market_diagnostic(self, event: dict, reason: str) -> None:
+        """无法用关键字识别 UP/DOWN 时打印一次市场结构，便于排查字段差异。"""
+        if self._diagnostic_logged:
+            return
+        self._diagnostic_logged = True
+        try:
+            ms = event.get('markets', []) or []
+            log_warn(
+                "🔎 market diagnostic ({reason}): event.slug={slug} markets={n} "
+                "samples={samples}".format(
+                    reason=reason,
+                    slug=event.get('slug'),
+                    n=len(ms),
+                    samples=[_market_summary_for_log(m) for m in ms[:2]],
+                )
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            log_warn(f"market diagnostic 打印失败: {e}")
 
     async def run(self):
         """异步主循环"""
@@ -141,17 +268,23 @@ class SniperBot:
             up_str = "N/A"
             down_str = "N/A"
             try:
-                _markets = event.get('markets', [])
-                _up_m = next((m for m in _markets if 'UP' in m.get('groupItemTitle', '').upper()), None)
-                _down_m = next((m for m in _markets if 'DOWN' in m.get('groupItemTitle', '').upper()), None)
-                if _up_m is None and _down_m is None and len(_markets) >= 2:
-                    _up_m, _down_m = _markets[0], _markets[1]
-                if _up_m:
-                    _up_prices = _parse_outcome_prices(_up_m.get('outcomePrices'))
+                _markets = event.get('markets', []) or []
+                _up_m, _down_m = _classify_up_down(_markets)
+                if _up_m is None or _down_m is None:
+                    self._log_market_diagnostic(
+                        event,
+                        reason=f"classify partial: up={_up_m is not None} down={_down_m is not None}",
+                    )
+                if _up_m is not None:
+                    _up_prices = _parse_outcome_prices(
+                        _up_m.get('outcomePrices'), default=[]
+                    )
                     if _up_prices:
                         up_str = f"{_up_prices[0]:.3f}"
-                if _down_m:
-                    _down_prices = _parse_outcome_prices(_down_m.get('outcomePrices'))
+                if _down_m is not None:
+                    _down_prices = _parse_outcome_prices(
+                        _down_m.get('outcomePrices'), default=[]
+                    )
                     if _down_prices:
                         down_str = f"{_down_prices[0]:.3f}"
             except Exception as e:
@@ -175,31 +308,28 @@ class SniperBot:
             return
 
         # 7. 解析市场价格
-        markets = event.get('markets', [])
+        markets = event.get('markets', []) or []
         active_markets = [m for m in markets
                           if m.get('acceptingOrders', False) and not m.get('closed', True)]
         if not active_markets:
             log_warn("⚠️  市场子单已关闭，跳过")
             return
 
-        up_market = None
-        down_market = None
-        for m in active_markets:
-            slug_lower = m.get('groupItemTitle', '').upper()
-            if 'UP' in slug_lower:
-                up_market = m
-            elif 'DOWN' in slug_lower:
-                down_market = m
-
-        # 如果无法区分UP/DOWN，用前两个市场
-        if up_market is None and len(active_markets) >= 2:
-            up_market, down_market = active_markets[0], active_markets[1]
-        elif up_market is None and len(active_markets) == 1:
-            log_warn("只找到1个子市场，跳过本周期")
+        up_market, down_market = _classify_up_down(active_markets)
+        if up_market is None or down_market is None:
+            self._log_market_diagnostic(
+                event,
+                reason=f"trade-path classify partial: up={up_market is not None} down={down_market is not None}",
+            )
+        if up_market is None:
+            log_warn("无法识别 UP 子市场，跳过本周期")
             return
 
-        up_prices = _parse_outcome_prices(up_market.get('outcomePrices')) if up_market else [0.5, 0.5]
-        down_prices = _parse_outcome_prices(down_market.get('outcomePrices')) if down_market else [0.5, 0.5]
+        up_prices = _parse_outcome_prices(up_market.get('outcomePrices'))
+        down_prices = (
+            _parse_outcome_prices(down_market.get('outcomePrices'))
+            if down_market else [0.5, 0.5]
+        )
 
         up_price = up_prices[0] if up_prices else 0.5
         down_price = down_prices[0] if down_prices else 0.5
@@ -250,7 +380,13 @@ class SniperBot:
             try:
                 # 找到对应方向的token_id
                 target_market = up_market if direction == 'UP' else down_market
-                token_id = target_market.get('clobTokenIds', [''])[0] if target_market else ''
+                if target_market is None:
+                    log_error(f"未找到 {direction} 方向的子市场，跳过")
+                    return
+                # clobTokenIds 在 gamma API 通常以 JSON 字符串形式返回
+                # （如 '["123...","456..."]'），需先解析再取第 0 个 token id。
+                token_ids = _parse_str_list(target_market.get('clobTokenIds'))
+                token_id = token_ids[0] if token_ids else ''
                 if not token_id:
                     log_error(f"未找到 {direction} 方向的token_id，跳过")
                     return
