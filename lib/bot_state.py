@@ -65,7 +65,7 @@ class BotState:
         if self.daily_pnl <= -daily_loss_limit:
             self.circuit_breaker = True
             return False, f"日亏损超限: ${self.daily_pnl:.2f} <= -${daily_loss_limit}"
-        if self.daily_trade_count >= daily_trade_limit:
+        if daily_trade_limit > 0 and self.daily_trade_count >= daily_trade_limit:
             return False, f"日交易次数超限: {self.daily_trade_count} >= {daily_trade_limit}"
         if self.consecutive_losses >= consec_loss_limit:
             return False, f"连续亏损超限: {self.consecutive_losses} >= {consec_loss_limit}"

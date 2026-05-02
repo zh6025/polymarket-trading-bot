@@ -43,7 +43,7 @@ pytest tests/
 | `DRY_RUN` | `true` | 模拟模式（不提交订单） |
 | `BET_SIZE_USDC` | `3.0` | 每次下注金额（USDC） |
 | `DAILY_LOSS_LIMIT_USDC` | `20` | 每日最大亏损触发熔断 |
-| `DAILY_TRADE_LIMIT` | `20` | 每日最大交易次数 |
+| `DAILY_TRADE_LIMIT` | `20` | 每日最大交易次数（设为 `0` 或负数表示不限） |
 | `CONSECUTIVE_LOSS_LIMIT` | `3` | 连续亏损上限 |
 | `SNIPER_ENTRY_WINDOW_SEC` | `60` | 末端入场时间窗口（秒） |
 | `HARD_STOP_SEC` | `30` | 到期前N秒硬停不入场 |
