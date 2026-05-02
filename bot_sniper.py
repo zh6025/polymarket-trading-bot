@@ -20,6 +20,7 @@ from lib.bot_state import BotState
 from lib.binance_feed import BinanceFeed
 from lib.sniper_strategy import SniperStrategy
 from lib import trade_journal
+from lib.paper_broker import simulate_limit_buy
 
 logging.basicConfig(
     level=logging.INFO,
@@ -446,8 +447,15 @@ class SniperBot:
                     filled_shares = tot_shares
                     avg_fill_price = tot_notional / tot_shares
             else:
-                # DRY_RUN：把请求的 shares 当成全部成交，仅用于 PnL 演练
-                filled_shares = shares_req
+                # DRY_RUN：优先使用 submit 时基于实时订单簿模拟出的成交，否则回退为全成交
+                sim = (pe.get("order_response") or {}).get("simulation") if isinstance(pe.get("order_response"), dict) else None
+                if isinstance(sim, dict) and float(sim.get("filled_shares") or 0.0) > 0:
+                    filled_shares = float(sim.get("filled_shares") or 0.0)
+                    avg = sim.get("avg_fill_price")
+                    if avg is not None:
+                        avg_fill_price = float(avg)
+                else:
+                    filled_shares = shares_req
         except Exception as e:
             log_warn(f"查询成交失败: {e}")
 
@@ -748,7 +756,22 @@ class SniperBot:
                 })
                 return
         else:
-            log_info(f"🔬 DRY-RUN: {direction} @ {entry_price:.3f} x {bet_size:.2f} USDC（跳过真实下单）")
+            # DRY_RUN：用真实订单簿模拟限价单成交，得到更接近实盘的 filled / avg_fill_price
+            sim_book: Dict[str, Any] = {}
+            try:
+                sim_book = self.client.get_orderbook(token_id) or {}
+            except Exception as e:
+                log_warn(f"DRY-RUN 取订单簿失败，回退到全成交假设: {e}")
+            sim = simulate_limit_buy(sim_book, entry_price, shares)
+            sim_filled = float(sim.get("filled_shares") or 0.0)
+            sim_avg = sim.get("avg_fill_price")
+            log_info(
+                f"🔬 DRY-RUN 模拟撮合: {direction} 限价={entry_price:.3f} "
+                f"请求={shares:.2f}股 → 成交={sim_filled:.2f}股 "
+                f"均价={('%.3f' % sim_avg) if sim_avg is not None else 'N/A'} "
+                f"剩余={float(sim.get('remaining_shares') or 0.0):.2f}股"
+            )
+            order_resp = {"paper": True, "simulation": sim}
 
         # 11.3 写入 JSONL 提交日志（DRY_RUN 也写，便于复盘策略行为）
         trade_journal.append("submit", {
