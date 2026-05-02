@@ -104,11 +104,21 @@ git pull origin main && docker-compose down --remove-orphans && docker-compose u
 docker-compose build --no-cache bot && docker-compose up -d --force-recreate bot
 
 # 一键彻底清掉旧机器人（停服务 + 删容器 + 删旧镜像 + 拉代码 + 无缓存重建 + 启动）
+# 若提示 "deploy/force-redeploy.sh: No such file or directory"，说明本地代码过旧，
+# 先用下面这条 bootstrap 命令拉取最新脚本再执行。
 sudo bash deploy/force-redeploy.sh
+
+# Bootstrap：服务器代码过旧、还没有 force-redeploy.sh 时一次性拉新代码并执行
+cd /opt/polymarket-bot \
+  && sudo git fetch origin main \
+  && sudo git reset --hard origin/main \
+  && sudo bash deploy/force-redeploy.sh
 ```
 
 > 如果日志里仍然出现已从仓库删除的中文提示（例如 `只找到1个子市场，跳过本周期`），
 > 说明容器跑的是旧镜像。直接运行 `deploy/force-redeploy.sh` 即可一次性清干净并重建。
+> 若服务器上根本没有该脚本（报 `No such file or directory`），改用上面的
+> bootstrap 命令：先 `git fetch + reset --hard origin/main` 拉到最新代码，再执行。
 
 ### systemd 管理（服务器已安装服务时）
 
