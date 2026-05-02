@@ -224,6 +224,33 @@ class SniperBot:
         # 仅在第一次回退到位置识别时打印一次结构 diagnostic
         self._diagnostic_logged: bool = False
 
+    def _fetch_yes_price_via_orderbook(self, market: Optional[dict]) -> Optional[float]:
+        """
+        从 Polymarket CLOB orderbook 获取该子市场 YES 侧的中间价。
+
+        和入场下单使用同一份数据来源（``clobTokenIds[0]`` → ``get_orderbook`` →
+        ``calculate_mid_price``），以保证「等待入场窗口」展示的份额价格与最终
+        实际成交逻辑一致。
+
+        任一步骤失败（缺 token id / 网络异常 / orderbook 为空）时回退到
+        ``_extract_yes_price``（基于 gamma 的 outcomePrices / bestBid 等字段），
+        最终仍取不到则返回 ``None``，由调用方显示占位符。
+        """
+        if not isinstance(market, dict):
+            return None
+        token_ids = _parse_str_list(market.get('clobTokenIds'))
+        token_id = token_ids[0] if token_ids else ''
+        if token_id:
+            try:
+                book = self.client.get_orderbook(token_id)
+                pricing = self.client.calculate_mid_price(book)
+                mid = pricing.get('mid') if isinstance(pricing, dict) else None
+                if mid is not None:
+                    return float(mid)
+            except Exception as e:
+                log_warn(f"orderbook 取价失败，回退到 outcomePrices: {e}")
+        return _extract_yes_price(market)
+
     def _log_market_diagnostic(self, event: dict, reason: str) -> None:
         """无法用关键字识别 UP/DOWN 时打印一次市场结构，便于排查字段差异。"""
         if self._diagnostic_logged:
@@ -307,14 +334,14 @@ class SniperBot:
                         event,
                         reason=f"classify partial: up={_up_m is not None} down={_down_m is not None}",
                     )
-                _up_p = _extract_yes_price(_up_m)
+                _up_p = self._fetch_yes_price_via_orderbook(_up_m)
                 if _up_p is not None:
                     up_str = f"{_up_p:.3f}"
-                _down_p = _extract_yes_price(_down_m)
+                _down_p = self._fetch_yes_price_via_orderbook(_down_m)
                 if _down_p is not None:
                     down_str = f"{_down_p:.3f}"
             except Exception as e:
-                log_warn(f"解析 outcomePrices 失败: {e}")
+                log_warn(f"解析份额价格失败: {e}")
             log_info(f"⏳ 等待入场窗口 (剩余{remaining_seconds}s) | BTC={btc_price:.2f} | UP份额={up_str} DOWN份额={down_str}")
             return
 
@@ -350,14 +377,14 @@ class SniperBot:
             log_warn("无法识别 UP 子市场，跳过本周期")
             return
 
-        up_prices = _parse_outcome_prices(up_market.get('outcomePrices'))
-        down_prices = (
-            _parse_outcome_prices(down_market.get('outcomePrices'))
-            if down_market else [0.5, 0.5]
+        up_price_ob = self._fetch_yes_price_via_orderbook(up_market)
+        down_price_ob = (
+            self._fetch_yes_price_via_orderbook(down_market)
+            if down_market else None
         )
 
-        up_price = up_prices[0] if up_prices else 0.5
-        down_price = down_prices[0] if down_prices else 0.5
+        up_price = up_price_ob if up_price_ob is not None else 0.5
+        down_price = down_price_ob if down_price_ob is not None else 0.5
 
         log_info(f"📊 价格: UP={up_price:.3f} DOWN={down_price:.3f}")
 
