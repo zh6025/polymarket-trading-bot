@@ -2,11 +2,21 @@ node_modules/
 .env
 .env.local
 .env.production
+# Catch any other .env variant (e.g. .env.save, .env.pre-*.bak) that may
+# contain secrets such as PRIVATE_KEY. Keep .env.example tracked as a template.
+.env.*
+!.env.example
 *.backup
+*.bak
+*.log
+nohup.out
+venv/
 bot_data.db
 simulate_data.db
 bot_state.json
 simulate_state.json
+trades.jsonl
+trades.*.jsonl
 logs/
 __pycache__/
 *.pyc

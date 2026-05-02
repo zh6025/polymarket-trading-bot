@@ -42,6 +42,10 @@ class BotState:
     closed_positions: List[dict] = field(default_factory=list)
     total_pnl: float = 0.0
     circuit_breaker: bool = False
+    # ---- sniper-specific fields (persisted so a restart never re-enters
+    # the same window or loses track of an unsettled order) ----
+    last_entered_window_ts: Optional[int] = None
+    pending_entry: Optional[dict] = None
 
     def check_daily_reset(self):
         """UTC日切时自动归零"""
@@ -54,7 +58,7 @@ class BotState:
             self.circuit_breaker = False
             self.current_date = today
 
-    def can_trade(self, daily_loss_limit: float = 20, daily_trade_limit: int = 20,
+    def can_trade(self, daily_loss_limit: float = 20,
                   consec_loss_limit: int = 3) -> tuple:
         """检查是否允许交易"""
         self.check_daily_reset()
@@ -65,8 +69,6 @@ class BotState:
         if self.daily_pnl <= -daily_loss_limit:
             self.circuit_breaker = True
             return False, f"日亏损超限: ${self.daily_pnl:.2f} <= -${daily_loss_limit}"
-        if self.daily_trade_count >= daily_trade_limit:
-            return False, f"日交易次数超限: {self.daily_trade_count} >= {daily_trade_limit}"
         if self.consecutive_losses >= consec_loss_limit:
             return False, f"连续亏损超限: {self.consecutive_losses} >= {consec_loss_limit}"
         return True, "OK"

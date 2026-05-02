@@ -10,9 +10,16 @@ WorkingDirectory=/opt/polymarket-bot
 
 # Remove stale containers/networks before starting (- allows graceful failure)
 ExecStartPre=-/usr/bin/docker compose down --remove-orphans
+# Belt-and-suspenders: force-remove any stale container with the fixed name
+# (e.g. left over from a previous compose project run in another directory),
+# otherwise `compose up` fails with: container name "/polymarket-bot" is already in use.
+ExecStartPre=-/usr/bin/docker rm -f polymarket-bot
 
-# Start bot in detached mode, forcing container recreation to avoid name conflicts
-ExecStart=/usr/bin/docker compose up -d --force-recreate bot
+# Start bot in detached mode, rebuilding the image and recreating the container
+# so that `systemctl restart` always picks up the latest code on disk. Without
+# `--build`, restarts silently keep running the old image and produce log lines
+# referencing strings that no longer exist in the source tree.
+ExecStart=/usr/bin/docker compose up -d --force-recreate --build bot
 
 # Properly tear down containers and networks on stop
 ExecStop=/usr/bin/docker compose down

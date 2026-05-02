@@ -91,20 +91,46 @@ docker-compose ps
 # 查看实时日志
 docker-compose logs -f bot
 
-# 重启机器人（推荐：先 down 再 up，避免容器名冲突）
+# 重启机器人（仅复用已有镜像，不会拾取代码改动）
 docker-compose down --remove-orphans && docker-compose up -d bot
 
 # 停止机器人
 docker-compose down
 
-# 更新代码并重启
+# 更新代码并重启（必须带 --build，否则会继续跑旧镜像里的旧代码）
 git pull origin main && docker-compose down --remove-orphans && docker-compose up -d --build bot
+
+# 强制重建镜像（怀疑跑的是旧代码时使用，例如日志里出现已经在仓库中删除的提示文案）
+docker-compose build --no-cache bot && docker-compose up -d --force-recreate bot
+
+# 一键彻底清掉旧机器人（停服务 + 删容器 + 删旧镜像 + 拉代码 + 无缓存重建 + 启动）
+# 推荐：直接复制下面这一整段执行，不依赖仓库里是否已经存在 force-redeploy.sh，
+# 适用于服务器代码过旧、脚本还没同步过来的情况。
+cd /opt/polymarket-bot \
+  && sudo git fetch origin main \
+  && sudo git reset --hard origin/main \
+  && (sudo systemctl stop polymarket-bot 2>/dev/null || true) \
+  && sudo docker compose down --remove-orphans --rmi local || true \
+  && sudo docker rm -f polymarket-bot 2>/dev/null || true \
+  && sudo docker image prune -f \
+  && sudo docker compose build --no-cache bot \
+  && sudo docker compose up -d --force-recreate bot \
+  && sudo docker compose ps
+
+# 若服务器上已经有 deploy/force-redeploy.sh，可以改用脚本（效果等价）
+sudo bash deploy/force-redeploy.sh
 ```
+
+> 如果日志里仍然出现已从仓库删除的中文提示（例如 `只找到1个子市场，跳过本周期`），
+> 说明容器跑的是旧镜像。优先使用上面的一键命令彻底清干净并重建；
+> 当报 `deploy/force-redeploy.sh: No such file or directory` 时，
+> 说明仓库里的脚本还没拉到本机——继续使用上面那一整段命令即可，不要单独执行
+> `sudo bash deploy/force-redeploy.sh`。
 
 ### systemd 管理（服务器已安装服务时）
 
 ```bash
-# 重启（服务会自动清理旧容器）
+# 重启（服务会自动清理旧容器并重建镜像，相当于自动应用最新代码）
 sudo systemctl restart polymarket-bot
 
 # 查看状态
