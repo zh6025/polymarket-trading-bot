@@ -48,6 +48,11 @@ DEFAULT_FRESHNESS_SEC = 30.0
 _RECONNECT_BACKOFF_INITIAL = 1.0
 _RECONNECT_BACKOFF_MAX = 30.0
 
+# 本地缓存保留的订单簿档位数上限（每侧）。Polymarket 5m up/down 市场流动性
+# 集中在最佳 1-2 档，保留 20 档足够策略读取 mid / best bid / best ask，且保持
+# 小内存占用与快速排序。
+MAX_BOOK_DEPTH = 20
+
 logger = logging.getLogger(__name__)
 
 
@@ -101,8 +106,8 @@ class _BookState:
         a = [(p, s) for (p, s) in asks if s > 0]
         b.sort(key=lambda x: x[0], reverse=True)
         a.sort(key=lambda x: x[0])
-        self.bids = b[:20]
-        self.asks = a[:20]
+        self.bids = b[:MAX_BOOK_DEPTH]
+        self.asks = a[:MAX_BOOK_DEPTH]
         self.last_update_ts = time.monotonic()
 
     # ---------------- incremental --------------------------------------
@@ -116,7 +121,7 @@ class _BookState:
         if size > 0:
             out.append((price, size))
         out.sort(key=lambda x: x[0], reverse=descending)
-        return out[:20]
+        return out[:MAX_BOOK_DEPTH]
 
     def apply_change(self, price: Optional[float], size: Optional[float],
                      side: Optional[str]) -> None:
