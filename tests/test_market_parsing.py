@@ -9,6 +9,7 @@ import pytest
 
 from bot_sniper import (
     _classify_up_down,
+    _extract_yes_price,
     _parse_outcome_prices,
     _parse_str_list,
 )
@@ -153,3 +154,32 @@ class TestClassifyUpDown:
 
     def test_empty(self):
         assert _classify_up_down([]) == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# _extract_yes_price — fallbacks when outcomePrices is missing
+# ---------------------------------------------------------------------------
+class TestExtractYesPrice:
+    def test_uses_outcome_prices_first(self):
+        m = {"outcomePrices": '["0.62","0.38"]', "lastTradePrice": "0.99"}
+        assert _extract_yes_price(m) == 0.62
+
+    def test_falls_back_to_last_trade_price(self):
+        m = {"outcomePrices": None, "lastTradePrice": "0.55"}
+        assert _extract_yes_price(m) == 0.55
+
+    def test_falls_back_to_mid_of_bid_ask(self):
+        m = {"bestBid": "0.40", "bestAsk": "0.50"}
+        assert _extract_yes_price(m) == pytest.approx(0.45)
+
+    def test_falls_back_to_single_side_bid(self):
+        assert _extract_yes_price({"bestBid": "0.30"}) == 0.30
+
+    def test_returns_none_when_all_missing(self):
+        assert _extract_yes_price({}) is None
+        assert _extract_yes_price(None) is None
+
+    def test_ignores_empty_outcome_prices(self):
+        # outcomePrices=[] should not block fallbacks
+        m = {"outcomePrices": [], "lastTradePrice": "0.51"}
+        assert _extract_yes_price(m) == 0.51

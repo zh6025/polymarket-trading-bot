@@ -160,6 +160,41 @@ def _classify_up_down(markets: List[dict]) -> Tuple[Optional[dict], Optional[dic
     return up, down
 
 
+def _coerce_float(raw: Any) -> Optional[float]:
+    """尽力把字符串/数字转 float；非法值返回 None。"""
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return None
+
+
+def _extract_yes_price(market: Optional[dict]) -> Optional[float]:
+    """
+    从一个子市场提取「YES」侧（UP/DOWN 子市场的多头）的最佳可用价格。
+    Gamma API 的不同响应中价格字段并不一致，按可信度依次回退：
+      1. outcomePrices[0]（事件聚合接口中最常见）
+      2. lastTradePrice（最近成交价）
+      3. (bestBid + bestAsk) / 2 中位（双边都存在时）
+      4. bestBid / bestAsk（仅单边）
+    全部缺失时返回 None，调用方可显示占位符。
+    """
+    if not isinstance(market, dict):
+        return None
+    prices = _parse_outcome_prices(market.get('outcomePrices'), default=[])
+    if prices:
+        return prices[0]
+    last = _coerce_float(market.get('lastTradePrice'))
+    if last is not None:
+        return last
+    bid = _coerce_float(market.get('bestBid'))
+    ask = _coerce_float(market.get('bestAsk'))
+    if bid is not None and ask is not None:
+        return (bid + ask) / 2
+    return bid if bid is not None else ask
+
+
 def _market_summary_for_log(m: dict) -> dict:
     """提取一个子市场的关键标识字段供 diagnostic 日志使用（控制体积）。"""
     return {
@@ -272,18 +307,12 @@ class SniperBot:
                         event,
                         reason=f"classify partial: up={_up_m is not None} down={_down_m is not None}",
                     )
-                if _up_m is not None:
-                    _up_prices = _parse_outcome_prices(
-                        _up_m.get('outcomePrices'), default=[]
-                    )
-                    if _up_prices:
-                        up_str = f"{_up_prices[0]:.3f}"
-                if _down_m is not None:
-                    _down_prices = _parse_outcome_prices(
-                        _down_m.get('outcomePrices'), default=[]
-                    )
-                    if _down_prices:
-                        down_str = f"{_down_prices[0]:.3f}"
+                _up_p = _extract_yes_price(_up_m)
+                if _up_p is not None:
+                    up_str = f"{_up_p:.3f}"
+                _down_p = _extract_yes_price(_down_m)
+                if _down_p is not None:
+                    down_str = f"{_down_p:.3f}"
             except Exception as e:
                 log_warn(f"解析 outcomePrices 失败: {e}")
             log_info(f"⏳ 等待入场窗口 (剩余{remaining_seconds}s) | BTC={btc_price:.2f} | UP份额={up_str} DOWN份额={down_str}")
