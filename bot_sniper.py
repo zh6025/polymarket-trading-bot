@@ -196,14 +196,11 @@ class SniperBot:
         self._diagnostic_logged = True
         try:
             ms = event.get('markets', []) or []
+            samples = [_market_summary_for_log(m) for m in ms[:2]]
             log_warn(
-                "🔎 market diagnostic ({reason}): event.slug={slug} markets={n} "
-                "samples={samples}".format(
-                    reason=reason,
-                    slug=event.get('slug'),
-                    n=len(ms),
-                    samples=[_market_summary_for_log(m) for m in ms[:2]],
-                )
+                f"🔎 market diagnostic ({reason}): "
+                f"event.slug={event.get('slug')} markets={len(ms)} "
+                f"samples={samples}"
             )
         except Exception as e:  # pragma: no cover - defensive
             log_warn(f"market diagnostic 打印失败: {e}")
