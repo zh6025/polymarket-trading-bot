@@ -102,12 +102,18 @@ git pull origin main && docker-compose down --remove-orphans && docker-compose u
 
 # 强制重建镜像（怀疑跑的是旧代码时使用，例如日志里出现已经在仓库中删除的提示文案）
 docker-compose build --no-cache bot && docker-compose up -d --force-recreate bot
+
+# 一键彻底清掉旧机器人（停服务 + 删容器 + 删旧镜像 + 拉代码 + 无缓存重建 + 启动）
+sudo bash deploy/force-redeploy.sh
 ```
+
+> 如果日志里仍然出现已从仓库删除的中文提示（例如 `只找到1个子市场，跳过本周期`），
+> 说明容器跑的是旧镜像。直接运行 `deploy/force-redeploy.sh` 即可一次性清干净并重建。
 
 ### systemd 管理（服务器已安装服务时）
 
 ```bash
-# 重启（服务会自动清理旧容器）
+# 重启（服务会自动清理旧容器并重建镜像，相当于自动应用最新代码）
 sudo systemctl restart polymarket-bot
 
 # 查看状态
