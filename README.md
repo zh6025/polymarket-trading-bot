@@ -65,8 +65,22 @@ pytest tests/
 - **安全开关**：`TRADING_ENABLED=false`（默认）
 - **每日熔断**：亏损超 `DAILY_LOSS_LIMIT_USDC` 自动停止
 - **连续亏损保护**：连续亏损 N 次停止
-- **Crash Recovery**：`bot_state.json` 原子写入，重启自动恢复
+- **下单前预检**：实盘下单前自动查询 USDC 余额与 CLOB approval，不足时跳过该窗口
+- **窗口末撤单**：窗口结束后主动撤掉未成交的限价单，避免死单占保证金
+- **实盘 PnL 回填**：窗口收盘后查 gamma 解析结果 + CLOB 真实成交，把实际盈亏写入 `daily_pnl`
+- **订单 JSONL 日志**：每笔 submit / settle / cancel 写入 `trades.jsonl`（路径由 `TRADE_LOG_FILE` 控制）
+- **Crash Recovery**：`bot_state.json` 原子写入；`last_entered_window_ts` 与 `pending_entry` 持久化，重启不会重复入场，也不会丢失待结算单
 - **UTC日切**：每日0时自动重置计数器
+
+## 实盘前自检
+
+把 `.env` 配好之后，先用 preflight 脚本一键确认实盘前置条件（钱包/签名/USDC余额/approval）：
+
+```bash
+python3 scripts/preflight.py
+```
+
+退出码 0 表示一切就绪，可以把 `DRY_RUN=false` 上实盘；退出码 2 表示有阻塞项需要修。
 
 ## Docker 部署
 

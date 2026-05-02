@@ -8,16 +8,46 @@ from typing import Dict, List, Optional, Any
 # environments where the SDK is not installed.
 try:
     from py_clob_client.client import ClobClient
-    from py_clob_client.clob_types import ApiCreds, OrderArgs
+    from py_clob_client.clob_types import (
+        ApiCreds,
+        OrderArgs,
+        BalanceAllowanceParams,
+        AssetType,
+        TradeParams,
+        OpenOrderParams,
+    )
     from py_clob_client.order_builder.constants import BUY, SELL
     _PY_CLOB_AVAILABLE = True
 except ImportError as _e:  # pragma: no cover - import guard
     ClobClient = None  # type: ignore
     ApiCreds = None  # type: ignore
     OrderArgs = None  # type: ignore
+    BalanceAllowanceParams = None  # type: ignore
+    AssetType = None  # type: ignore
+    TradeParams = None  # type: ignore
+    OpenOrderParams = None  # type: ignore
     BUY, SELL = "BUY", "SELL"
     _PY_CLOB_AVAILABLE = False
     _PY_CLOB_IMPORT_ERROR = _e
+
+
+# USDC has 6 decimals on Polygon. balance/allowance from get_balance_allowance
+# come as integer strings in base units; divide by 1e6 to get USDC.
+_USDC_DECIMALS = 6
+_USDC_SCALE = 10 ** _USDC_DECIMALS
+
+
+def _coerce_int(raw: Any, default: int = 0) -> int:
+    """py_clob_client returns balance/allowance as decimal strings; coerce safely."""
+    if raw is None:
+        return default
+    try:
+        if isinstance(raw, str):
+            # strip whitespace and any non-digit suffix tolerantly
+            return int(float(raw))
+        return int(raw)
+    except (ValueError, TypeError):
+        return default
 
 
 # py_clob_client signature_type constants:
@@ -208,6 +238,137 @@ class PolymarketClient:
         else:
             log_info(f"ORDER OK: {resp}")
         return resp
+
+    # ---------------------------------------------------------------- balance
+    def get_usdc_balance_allowance(self) -> Dict[str, Any]:
+        """Query the connected wallet's USDC balance and CLOB allowance.
+
+        Returns a dict with floating-point USDC values and raw response::
+
+            {
+              'balance_usdc': float,    # current USDC balance of the funder
+              'allowance_usdc': float,  # USDC approval to the CLOB exchange
+              'ok': bool,               # True if both balance and allowance fetched
+              'raw': dict,              # raw response from py_clob_client
+            }
+
+        Raises if the CLOB client cannot be initialized. On a CLOB API failure
+        the returned dict has ``ok=False`` and an ``error`` field; the caller
+        should treat that as "skip placing an order this cycle".
+        """
+        clob = self._init_clob_client()
+        sig = self.signature_type if self.signature_type is not None else 0
+        params = BalanceAllowanceParams(
+            asset_type=AssetType.COLLATERAL,
+            signature_type=sig,
+        )
+        try:
+            resp = clob.get_balance_allowance(params)
+        except Exception as e:
+            log_warn(f"get_balance_allowance 失败: {e}")
+            return {
+                "balance_usdc": 0.0,
+                "allowance_usdc": 0.0,
+                "ok": False,
+                "error": str(e),
+                "raw": None,
+            }
+
+        bal_raw = resp.get("balance") if isinstance(resp, dict) else None
+        allow_raw = resp.get("allowance") if isinstance(resp, dict) else None
+        bal = _coerce_int(bal_raw)
+        allow = _coerce_int(allow_raw)
+        return {
+            "balance_usdc": bal / _USDC_SCALE,
+            "allowance_usdc": allow / _USDC_SCALE,
+            "ok": True,
+            "raw": resp,
+        }
+
+    def update_usdc_allowance(self) -> Dict[str, Any]:
+        """Force-refresh the cached balance/allowance on the CLOB side.
+
+        Useful after the user just approved USDC on-chain and wants the bot to
+        pick up the new allowance without restart.
+        """
+        clob = self._init_clob_client()
+        sig = self.signature_type if self.signature_type is not None else 0
+        params = BalanceAllowanceParams(
+            asset_type=AssetType.COLLATERAL,
+            signature_type=sig,
+        )
+        try:
+            return clob.update_balance_allowance(params)
+        except Exception as e:  # pragma: no cover - defensive
+            log_warn(f"update_balance_allowance 失败: {e}")
+            return {"ok": False, "error": str(e)}
+
+    # --------------------------------------------------------------- orders
+    def get_open_orders(
+        self,
+        market: Optional[str] = None,
+        asset_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return the connected wallet's open (unfilled) CLOB orders.
+
+        Optionally filter to a specific ``market`` (condition_id) or
+        ``asset_id`` (token_id). Returns ``[]`` on API errors.
+        """
+        clob = self._init_clob_client()
+        params = OpenOrderParams(market=market, asset_id=asset_id)
+        try:
+            orders = clob.get_orders(params)
+            return list(orders) if orders else []
+        except Exception as e:
+            log_warn(f"get_orders 失败: {e}")
+            return []
+
+    def cancel_orders(self, order_ids: List[str]) -> Dict[str, Any]:
+        """Cancel a list of open orders by id.
+
+        Returns the raw CLOB response. Empty input is a no-op.
+        """
+        if not order_ids:
+            return {"canceled": [], "not_canceled": {}}
+        clob = self._init_clob_client()
+        try:
+            resp = clob.cancel_orders(list(order_ids))
+            log_info(f"CANCEL OK: {resp}")
+            return resp if isinstance(resp, dict) else {"raw": resp}
+        except Exception as e:
+            log_error(f"cancel_orders 失败: {e}")
+            return {"ok": False, "error": str(e)}
+
+    # ----------------------------------------------------------------- fills
+    def get_trades_for_market(
+        self,
+        market: Optional[str] = None,
+        asset_id: Optional[str] = None,
+        after: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return fills for the connected wallet on a given market/asset.
+
+        ``after`` is a unix timestamp; only trades at-or-after that time are
+        returned (when supported by the API).
+        """
+        clob = self._init_clob_client()
+        try:
+            maker = clob.get_address()
+        except Exception:
+            maker = None
+        params = TradeParams(
+            maker_address=maker,
+            market=market,
+            asset_id=asset_id,
+            after=after,
+        )
+        try:
+            trades = clob.get_trades(params)
+            return list(trades) if trades else []
+        except Exception as e:
+            log_warn(f"get_trades 失败: {e}")
+            return []
+
     
     def get_markets(self) -> List[Dict[str, Any]]:
         """Fetch markets list from CLOB"""

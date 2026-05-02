@@ -42,6 +42,10 @@ class BotState:
     closed_positions: List[dict] = field(default_factory=list)
     total_pnl: float = 0.0
     circuit_breaker: bool = False
+    # ---- sniper-specific fields (persisted so a restart never re-enters
+    # the same window or loses track of an unsettled order) ----
+    last_entered_window_ts: Optional[int] = None
+    pending_entry: Optional[dict] = None
 
     def check_daily_reset(self):
         """UTC日切时自动归零"""

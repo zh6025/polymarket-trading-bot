@@ -19,6 +19,7 @@ from lib.polymarket_ws import PolymarketMarketWS
 from lib.bot_state import BotState
 from lib.binance_feed import BinanceFeed
 from lib.sniper_strategy import SniperStrategy
+from lib import trade_journal
 
 logging.basicConfig(
     level=logging.INFO,
@@ -222,12 +223,15 @@ class SniperBot:
         self.strategy = strategy
         self.market_ws = market_ws
 
-        # 每个窗口只允许入场1次
-        self._last_entered_window_ts: Optional[int] = None
+        # 每个窗口只允许入场1次（重启后从持久化 state 恢复，避免重复下单）
+        self._last_entered_window_ts: Optional[int] = state.last_entered_window_ts
         # 仅在第一次回退到位置识别时打印一次结构 diagnostic
         self._diagnostic_logged: bool = False
         # 上一次推送给 WS 的 (up_token, down_token) 组合，用于检测窗口翻页
         self._ws_active_pair: Tuple[Optional[str], Optional[str]] = (None, None)
+        # 距离上一次余额预检冷却（避免每个周期都打 RPC）
+        self._last_preflight_ts: float = 0.0
+        self._last_preflight_result: Optional[dict] = None
 
     def _fetch_yes_price_via_orderbook(self, market: Optional[dict]) -> Optional[float]:
         """
@@ -312,6 +316,194 @@ class SniperBot:
         except Exception as e:  # pragma: no cover - defensive
             log_warn(f"market diagnostic 打印失败: {e}")
 
+    # ----------------------------------------------------------------- preflight
+    def _preflight_balance(self, notional_usdc: float) -> Tuple[bool, str, dict]:
+        """检查 USDC 余额与 CLOB approval 是否足以下这笔单。
+
+        DRY_RUN 或 TRADING_ENABLED=false 时直接放行（返回 ok=True），让监控
+        模式不被这一项卡住。失败时返回 (False, 原因) 由调用方决定告警/跳过。
+        """
+        if self.config.dry_run or not self.config.trading_enabled:
+            return True, "dry-run", {}
+        try:
+            res = self.client.get_usdc_balance_allowance()
+        except Exception as e:
+            return False, f"balance/allowance 查询异常: {e}", {}
+        if not res.get("ok"):
+            return False, f"balance/allowance 不可用: {res.get('error', 'unknown')}", res
+        bal = float(res.get("balance_usdc", 0.0))
+        allow = float(res.get("allowance_usdc", 0.0))
+        # 留 5% 缓冲，避免 fee/滑点导致刚好不够
+        required = notional_usdc * 1.05
+        if bal < required:
+            return (
+                False,
+                f"USDC 余额不足: {bal:.2f} < 需要 {required:.2f} (含5%缓冲)",
+                res,
+            )
+        if allow < required:
+            return (
+                False,
+                f"USDC approval 不足: {allow:.2f} < 需要 {required:.2f}；"
+                f"请到 Polymarket 网站完成 USDC approval",
+                res,
+            )
+        return True, f"OK (balance={bal:.2f} allowance={allow:.2f})", res
+
+    # ------------------------------------------------------------ settlement
+    def _settle_pending_entry(self, now: int) -> None:
+        """如果存在待结算的 pending_entry，且其窗口已结束，则结算。
+
+        步骤：
+          1. 查 gamma 拿到该 slug 的最终 outcomePrices（赢=1，输=0）。
+          2. 查 CLOB get_trades 拿到我们这边实际成交的份数与均价。
+          3. 计算实盘 PnL：未成交的部分 PnL=0，成交部分按结果赔付。
+          4. 把真实 PnL 通过 record_trade 写入 daily_pnl 风控。
+          5. 写一行 settle 到 trades.jsonl 用于复盘。
+          6. 同时尝试撤掉残留的未成交订单（窗口结束后死单，占用保证金）。
+        """
+        pe = self.state.pending_entry
+        if not pe or pe.get("settled"):
+            return
+        end_ts = int(pe.get("window_end_ts") or 0)
+        if end_ts <= 0 or now < end_ts:
+            return  # 窗口还没结束
+
+        slug = pe.get("slug") or ""
+        token_id = pe.get("token_id") or ""
+        condition_id = pe.get("condition_id") or None
+        direction = pe.get("direction") or "UP"
+        entry_price = float(pe.get("entry_price") or 0.0)
+        shares_req = float(pe.get("shares_requested") or 0.0)
+        order_id = pe.get("order_id") or None
+        attempts = int(pe.get("settle_attempts") or 0) + 1
+        pe["settle_attempts"] = attempts
+
+        # 1) 撤掉任何残留的未成交订单（避免窗口已结束还有死单）
+        if order_id and self.config.trading_enabled and not self.config.dry_run:
+            try:
+                opens = self.client.get_open_orders(asset_id=token_id)
+                still_open_ids = [
+                    o.get("id") for o in opens
+                    if isinstance(o, dict) and o.get("id") == order_id
+                ]
+                if still_open_ids:
+                    cancel_resp = self.client.cancel_orders(still_open_ids)
+                    log_info(
+                        f"🧹 已撤未成交订单: order_id={order_id[:12]}… resp={cancel_resp}"
+                    )
+                    trade_journal.append("cancel", {
+                        "slug": slug,
+                        "order_id": order_id,
+                        "response": cancel_resp,
+                    })
+            except Exception as e:
+                log_warn(f"撤单异常（不影响结算）: {e}")
+
+        # 2) 查 gamma 拿到最终赔付价（outcomePrices）
+        outcome_payout: Optional[float] = None
+        market_resolved = False
+        try:
+            event = self.client.get_btc_5m_market_by_slug(slug) if slug else None
+            if event:
+                up_m, down_m = _classify_up_down(event.get("markets", []) or [])
+                target = up_m if direction == "UP" else down_m
+                if isinstance(target, dict):
+                    prices = _parse_outcome_prices(target.get("outcomePrices"), default=[])
+                    closed = bool(target.get("closed", False))
+                    # 已结算：outcomePrices 非空且为 0/1 二元
+                    if closed and prices:
+                        outcome_payout = float(prices[0])
+                        market_resolved = True
+        except Exception as e:
+            log_warn(f"查询 gamma 结算价失败: {e}")
+
+        # 3) 查实际成交（拿到真正的 filled shares 与均价）
+        filled_shares = 0.0
+        avg_fill_price = entry_price
+        try:
+            if self.config.trading_enabled and not self.config.dry_run:
+                submit_ts = int(pe.get("submit_ts") or end_ts - 60)
+                trades = self.client.get_trades_for_market(
+                    market=condition_id,
+                    asset_id=token_id,
+                    after=max(submit_ts - 5, 0),
+                )
+                tot_shares = 0.0
+                tot_notional = 0.0
+                for t in trades:
+                    try:
+                        sz = float(t.get("size", 0))
+                        pr = float(t.get("price", 0))
+                        side = str(t.get("side", "")).upper()
+                        if side and side != "BUY":
+                            continue
+                        tot_shares += sz
+                        tot_notional += sz * pr
+                    except (TypeError, ValueError):
+                        continue
+                if tot_shares > 0:
+                    filled_shares = tot_shares
+                    avg_fill_price = tot_notional / tot_shares
+            else:
+                # DRY_RUN：把请求的 shares 当成全部成交，仅用于 PnL 演练
+                filled_shares = shares_req
+        except Exception as e:
+            log_warn(f"查询成交失败: {e}")
+
+        # 4) 决定是否可以结算
+        # 如果市场还没 resolve，但已经多次尝试且距窗口结束 > 10 分钟，按 0 PnL 收尾
+        # （仍保留 pending 中的真实成交记录给复盘）。
+        STALE_AFTER_SEC = 10 * 60
+        give_up = (now - end_ts) > STALE_AFTER_SEC and attempts >= 3
+        if not market_resolved and not give_up and outcome_payout is None:
+            log_info(
+                f"⏳ 等待 gamma 结算（slug={slug} attempt={attempts}），下个周期再试"
+            )
+            self.state.save()
+            return
+
+        # 5) 计算实盘 PnL
+        if outcome_payout is None:
+            outcome_payout = 0.0  # 放弃模式：保守按 0 计
+        # PnL = filled_shares * (payout - avg_fill_price)
+        realized_pnl = round(filled_shares * (outcome_payout - avg_fill_price), 4)
+
+        log_info(
+            f"💼 结算 {slug} dir={direction} filled={filled_shares:.2f} @ "
+            f"{avg_fill_price:.3f} payout={outcome_payout:.2f} → PnL={realized_pnl:+.3f} USDC"
+        )
+
+        # 6) 写入风控（如果完全没成交则不计入 trade count，避免污染连亏统计）
+        if filled_shares > 0:
+            self.state.record_trade(pnl=realized_pnl)
+
+        trade_journal.append("settle", {
+            "slug": slug,
+            "direction": direction,
+            "entry_price": entry_price,
+            "shares_requested": shares_req,
+            "filled_shares": filled_shares,
+            "avg_fill_price": avg_fill_price,
+            "outcome_payout": outcome_payout,
+            "realized_pnl": realized_pnl,
+            "market_resolved": market_resolved,
+            "gave_up": give_up,
+            "order_id": order_id,
+        })
+
+        pe["settled"] = True
+        pe["realized_pnl"] = realized_pnl
+        pe["filled_shares"] = filled_shares
+        pe["avg_fill_price"] = avg_fill_price
+        pe["outcome_payout"] = outcome_payout
+        # 已结算后清空 pending（保留最近一条到 closed_positions 备查）
+        self.state.closed_positions.append(pe)
+        # 仅保留最近 50 条避免文件无限增长
+        self.state.closed_positions = self.state.closed_positions[-50:]
+        self.state.pending_entry = None
+        self.state.save()
+
     async def run(self):
         """异步主循环"""
         log_info("╔═══════════════════════════════════════════════╗")
@@ -353,6 +545,12 @@ class SniperBot:
     async def _cycle(self):
         """单次周期"""
         now = int(time.time())
+
+        # 0. 优先尝试结算上一窗口未结算的 pending_entry（不阻塞主流程）
+        try:
+            self._settle_pending_entry(now)
+        except Exception as e:
+            log_warn(f"结算异常（忽略，下周期重试）: {e}")
 
         # 1. 获取Binance BTC实时价格（记录历史）
         btc_price = self.feed.get_btc_price()
@@ -498,48 +696,99 @@ class SniperBot:
                  f"edge={edge:.3f} "
                  f"估计概率={estimated_prob:.1%}")
 
-        # 11. 执行下单
+        # 11. 解析目标 token / condition / shares（实盘 & DRY_RUN 都需要）
+        target_market = up_market if direction == 'UP' else down_market
+        if target_market is None:
+            log_error(f"未找到 {direction} 方向的子市场，跳过")
+            return
+        token_ids = _parse_str_list(target_market.get('clobTokenIds'))
+        token_id = token_ids[0] if token_ids else ''
+        if not token_id:
+            log_error(f"未找到 {direction} 方向的token_id，跳过")
+            return
+        if entry_price <= 0:
+            log_error(f"非法 entry_price={entry_price}，跳过下单")
+            return
+        # py_clob_client 的 size 单位是「股数」(shares)，不是 USDC。
+        shares = round(bet_size / entry_price, 2)
+        condition_id = target_market.get('conditionId') or target_market.get('condition_id') or None
+
+        # 11.1 下单前余额/授权预检（仅实盘路径执行）
+        ok_pre, pre_reason, _pre_raw = self._preflight_balance(bet_size)
+        if not ok_pre:
+            log_error(f"⛔ 下单预检不通过，跳过本窗口: {pre_reason}")
+            return
+        log_info(f"🔍 余额预检: {pre_reason}")
+
+        # 11.2 执行下单
+        order_resp: dict = {}
+        order_id: Optional[str] = None
         if not self.config.dry_run and self.config.trading_enabled:
             try:
-                # 找到对应方向的token_id
-                target_market = up_market if direction == 'UP' else down_market
-                if target_market is None:
-                    log_error(f"未找到 {direction} 方向的子市场，跳过")
-                    return
-                # clobTokenIds 在 gamma API 通常以 JSON 字符串形式返回
-                # （如 '["123...","456..."]'），需先解析再取第 0 个 token id。
-                token_ids = _parse_str_list(target_market.get('clobTokenIds'))
-                token_id = token_ids[0] if token_ids else ''
-                if not token_id:
-                    log_error(f"未找到 {direction} 方向的token_id，跳过")
-                    return
-
-                # py_clob_client 的 size 单位是「股数」（shares），不是 USDC。
-                # shares = notional_USDC / price
-                if entry_price <= 0:
-                    log_error(f"非法 entry_price={entry_price}，跳过下单")
-                    return
-                shares = round(bet_size / entry_price, 2)
-
-                self.client.place_order(
+                order_resp = self.client.place_order(
                     token_id=token_id,
                     side='buy',
                     price=entry_price,
                     size=shares,
-                )
+                ) or {}
+                order_id = order_resp.get('orderID') or order_resp.get('order_id') or None
                 log_info(
                     f"✅ 订单已提交: {direction} @ {entry_price:.3f} "
-                    f"shares={shares:.2f} (~{bet_size:.2f} USDC)"
+                    f"shares={shares:.2f} (~{bet_size:.2f} USDC) order_id={order_id}"
                 )
             except Exception as e:
                 log_error(f"下单失败: {e}")
+                trade_journal.append("submit_error", {
+                    "slug": event.get('slug'),
+                    "direction": direction,
+                    "entry_price": entry_price,
+                    "shares": shares,
+                    "notional_usdc": bet_size,
+                    "error": str(e),
+                })
                 return
         else:
             log_info(f"🔬 DRY-RUN: {direction} @ {entry_price:.3f} x {bet_size:.2f} USDC（跳过真实下单）")
 
-        # 12. 记录入场，防止本窗口重复入场
+        # 11.3 写入 JSONL 提交日志（DRY_RUN 也写，便于复盘策略行为）
+        trade_journal.append("submit", {
+            "slug": event.get('slug'),
+            "window_open_ts": window_open_ts,
+            "window_end_ts": window_end_ts,
+            "direction": direction,
+            "entry_price": entry_price,
+            "shares": shares,
+            "notional_usdc": bet_size,
+            "edge": edge,
+            "estimated_prob": estimated_prob,
+            "kelly_fraction": kelly,
+            "token_id": token_id,
+            "condition_id": condition_id,
+            "order_id": order_id,
+            "order_response": order_resp,
+            "dry_run": bool(self.config.dry_run),
+        })
+
+        # 12. 记录入场（持久化），防止本窗口重复入场 + 让重启能继续结算
         self._last_entered_window_ts = window_open_ts
-        self.state.record_trade(pnl=0.0)  # 真实盈亏在结算后更新
+        self.state.last_entered_window_ts = window_open_ts
+        self.state.pending_entry = {
+            "slug": event.get('slug'),
+            "window_open_ts": window_open_ts,
+            "window_end_ts": window_end_ts,
+            "direction": direction,
+            "token_id": token_id,
+            "condition_id": condition_id,
+            "entry_price": entry_price,
+            "shares_requested": shares,
+            "notional_usdc": bet_size,
+            "order_id": order_id,
+            "order_response": order_resp,
+            "submit_ts": int(time.time()),
+            "dry_run": bool(self.config.dry_run),
+            "settled": False,
+            "settle_attempts": 0,
+        }
         self.state.save()
         log_info(f"💾 入场记录已保存 | 今日交易={self.state.daily_trade_count} "
                  f"今日PnL=${self.state.daily_pnl:.2f}")
