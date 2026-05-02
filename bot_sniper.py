@@ -15,6 +15,7 @@ from typing import Any, List, Optional, Tuple
 from lib.config import Config
 from lib.utils import log_info, log_error, log_warn
 from lib.polymarket_client import PolymarketClient
+from lib.polymarket_ws import PolymarketMarketWS
 from lib.bot_state import BotState
 from lib.binance_feed import BinanceFeed
 from lib.sniper_strategy import SniperStrategy
@@ -212,34 +213,45 @@ class SniperBot:
     """末端狙击机器人主控"""
 
     def __init__(self, config: Config, client: PolymarketClient,
-                 state: BotState, feed: BinanceFeed, strategy: SniperStrategy):
+                 state: BotState, feed: BinanceFeed, strategy: SniperStrategy,
+                 market_ws: Optional[PolymarketMarketWS] = None):
         self.config = config
         self.client = client
         self.state = state
         self.feed = feed
         self.strategy = strategy
+        self.market_ws = market_ws
 
         # 每个窗口只允许入场1次
         self._last_entered_window_ts: Optional[int] = None
         # 仅在第一次回退到位置识别时打印一次结构 diagnostic
         self._diagnostic_logged: bool = False
+        # 上一次推送给 WS 的 (up_token, down_token) 组合，用于检测窗口翻页
+        self._ws_active_pair: Tuple[Optional[str], Optional[str]] = (None, None)
 
     def _fetch_yes_price_via_orderbook(self, market: Optional[dict]) -> Optional[float]:
         """
         从 Polymarket CLOB orderbook 获取该子市场 YES 侧的中间价。
 
-        和入场下单使用同一份数据来源（``clobTokenIds[0]`` → ``get_orderbook`` →
-        ``calculate_mid_price``），以保证「等待入场窗口」展示的份额价格与最终
-        实际成交逻辑一致。
+        优先级：
+          1. ``PolymarketMarketWS`` 实时缓存（订阅了对应 token 时秒级新鲜）
+          2. REST ``get_orderbook`` + ``calculate_mid_price``
+          3. gamma 字段（``outcomePrices`` / ``lastTradePrice`` / ``bestBid`` 等）
 
-        任一步骤失败（缺 token id / 网络异常 / orderbook 为空）时回退到
-        ``_extract_yes_price``（基于 gamma 的 outcomePrices / bestBid 等字段），
-        最终仍取不到则返回 ``None``，由调用方显示占位符。
+        前两者都失败时回到 ``_extract_yes_price``，再失败返回 ``None`` 由调用方
+        显示占位符。
         """
         if not isinstance(market, dict):
             return None
         token_ids = _parse_str_list(market.get('clobTokenIds'))
         token_id = token_ids[0] if token_ids else ''
+        if token_id and self.market_ws is not None:
+            try:
+                mid = self.market_ws.get_mid(token_id)
+                if mid is not None:
+                    return float(mid)
+            except Exception as e:  # pragma: no cover - defensive
+                log_warn(f"WS 取价异常，回退到 REST: {e}")
         if token_id:
             try:
                 book = self.client.get_orderbook(token_id)
@@ -250,6 +262,39 @@ class SniperBot:
             except Exception as e:
                 log_warn(f"orderbook 取价失败，回退到 outcomePrices: {e}")
         return _extract_yes_price(market)
+
+    def _update_ws_subscriptions(self, up_market: Optional[dict],
+                                 down_market: Optional[dict]) -> None:
+        """根据当前窗口的 UP/DOWN 子市场更新 WS 订阅集合。
+
+        只有 token 组合发生变化（典型：5m 窗口翻页）才会触发 ``set_active_tokens``，
+        避免每个轮询周期都重连。
+        """
+        if self.market_ws is None:
+            return
+        up_tid = ''
+        down_tid = ''
+        if isinstance(up_market, dict):
+            tids = _parse_str_list(up_market.get('clobTokenIds'))
+            up_tid = tids[0] if tids else ''
+        if isinstance(down_market, dict):
+            tids = _parse_str_list(down_market.get('clobTokenIds'))
+            down_tid = tids[0] if tids else ''
+        new_pair = (up_tid or None, down_tid or None)
+        if new_pair == self._ws_active_pair:
+            return
+        tokens = [t for t in (up_tid, down_tid) if t]
+        try:
+            self.market_ws.set_active_tokens(tokens)
+            self._ws_active_pair = new_pair
+            if tokens:
+                log_info(
+                    f"📡 WS 订阅切换: UP={up_tid[:12] + '…' if up_tid else 'N/A'} "
+                    f"DOWN={down_tid[:12] + '…' if down_tid else 'N/A'}"
+                )
+        except Exception as e:  # pragma: no cover - defensive
+            log_warn(f"更新 WS 订阅失败: {e}")
+
 
     def _log_market_diagnostic(self, event: dict, reason: str) -> None:
         """无法用关键字识别 UP/DOWN 时打印一次市场结构，便于排查字段差异。"""
@@ -279,14 +324,31 @@ class SniperBot:
         if not self.config.trading_enabled:
             log_warn("⚠️  TRADING_ENABLED=false，监控模式（不会下单）")
 
-        while True:
-            try:
-                await self._cycle()
-            except KeyboardInterrupt:
-                raise
-            except Exception as e:
-                log_error(f"周期异常（已捕获，继续运行）: {e}")
-            await asyncio.sleep(POLL_INTERVAL_SEC)
+        # 在同一个 event loop 中启动 Polymarket 实时行情 WS 任务
+        ws_task: Optional[asyncio.Task] = None
+        if self.market_ws is not None:
+            ws_task = asyncio.create_task(self.market_ws.run(),
+                                          name="polymarket-market-ws")
+            log_info("📡 Polymarket 行情 WS 任务已启动")
+
+        try:
+            while True:
+                try:
+                    await self._cycle()
+                except KeyboardInterrupt:
+                    raise
+                except Exception as e:
+                    log_error(f"周期异常（已捕获，继续运行）: {e}")
+                await asyncio.sleep(POLL_INTERVAL_SEC)
+        finally:
+            if self.market_ws is not None:
+                self.market_ws.stop()
+            if ws_task is not None:
+                ws_task.cancel()
+                try:
+                    await ws_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
     async def _cycle(self):
         """单次周期"""
@@ -320,6 +382,15 @@ class SniperBot:
             return
 
         log_info(f"📅 窗口: open_ts={window_open_ts} remaining={remaining_seconds}s")
+
+        # 3.5 在做任何价格读取前，先把当前窗口的 UP/DOWN token 推送给 WS 订阅
+        # （首次出现 / 窗口翻页时会触发重连，让 ``get_mid`` 立刻收到 book 快照）。
+        try:
+            _all_markets = event.get('markets', []) or []
+            _up_pre, _down_pre = _classify_up_down(_all_markets)
+            self._update_ws_subscriptions(_up_pre, _down_pre)
+        except Exception as e:  # pragma: no cover - defensive
+            log_warn(f"准备 WS 订阅失败: {e}")
 
         # 4. 如果剩余 > entry_window_high + 5s：仅记录价格，等待入场窗口
         if remaining_seconds > self.strategy.entry_window_high + 5:
@@ -522,8 +593,10 @@ def main():
             kelly_fraction=config.sniper_kelly_fraction,
         )
 
+        market_ws = PolymarketMarketWS()
+
         bot = SniperBot(config=config, client=client, state=state,
-                        feed=feed, strategy=strategy)
+                        feed=feed, strategy=strategy, market_ws=market_ws)
 
         asyncio.run(bot.run())
 

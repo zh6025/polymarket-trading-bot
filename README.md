@@ -11,6 +11,7 @@ lib/
   sniper_strategy.py       # 末端狙击策略核心（Kelly公式 + 动量确认）
   bot_state.py             # 状态持久化 + 风控 + crash recovery
   polymarket_client.py     # Polymarket CLOB API 客户端
+  polymarket_ws.py         # Polymarket CLOB 实时行情 WebSocket（UP/DOWN 订单簿）
   binance_feed.py          # Binance BTC 实时价格
   utils.py                 # 日志 + APIClient 工具
 tests/                     # 单元测试
