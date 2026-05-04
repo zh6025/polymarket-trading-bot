@@ -1,16 +1,211 @@
 ﻿import requests
 import time
 from lib.utils import APIClient, log_info, log_error, log_warn
+from lib.config import Config
 from typing import Dict, List, Optional, Any
 
+
+def _round_to_tick(price: float, tick: float) -> float:
+    """把价格取整到指定 tick（如 0.01 / 0.001）。"""
+    if tick <= 0:
+        return price
+    # 用整数避免浮点累积误差
+    steps = round(price / tick)
+    rounded = steps * tick
+    # 根据 tick 精度限制小数位
+    s = format(tick, 'f').rstrip('0')
+    decimals = len(s.split('.')[-1]) if '.' in s else 0
+    return round(rounded, decimals)
+
+
+def _round_size(size: float, decimals: int = 2) -> float:
+    """订单 size 取整到指定小数位（默认 0.01 USDC）。"""
+    factor = 10 ** decimals
+    # 用 floor 避免下单超过预算
+    import math
+    return math.floor(size * factor) / factor
+
+
 class PolymarketClient:
-    """Polymarket API Client for market data and orderbook"""
-    
+    """Polymarket API Client：行情 + 实盘下单。
+
+    实盘相关方法依赖 py_clob_client 与 POLY_PRIVATE_KEY/POLY_FUNDER 环境变量。
+    DRY_RUN=true 或缺少私钥时，CLOB 客户端不会被初始化，行情接口仍可用。
+    """
+
     BASE_URL = "https://clob.polymarket.com"
-    
-    def __init__(self):
-        self.client = APIClient(base_url="https://clob.polymarket.com")
-    
+
+    # 默认 tick / 最小订单
+    DEFAULT_TICK_SIZE = 0.01
+    MIN_ORDER_SIZE_USDC = 5.0  # Polymarket 最小订单金额
+
+    def __init__(self, config: Optional[Config] = None):
+        self.client = APIClient(base_url=self.BASE_URL)
+        self.config = config
+        self._clob = None
+        self._creds = None
+        # 仅当配置齐备时初始化 CLOB 签名客户端
+        if config is not None and config.poly_private_key and config.trading_enabled:
+            try:
+                self._init_clob_client()
+            except Exception as e:
+                log_error(f"初始化 CLOB 客户端失败: {e}")
+                self._clob = None
+
+    # ------------------------------------------------------------------
+    # CLOB 实盘客户端
+    # ------------------------------------------------------------------
+    def _init_clob_client(self):
+        """初始化 py_clob_client.ClobClient 并装配 L2 凭据。"""
+        from py_clob_client.client import ClobClient
+        from py_clob_client.clob_types import ApiCreds
+
+        cfg = self.config
+        log_info(f"🔐 初始化 CLOB 客户端 (chain_id={cfg.poly_chain_id}, "
+                 f"signature_type={cfg.poly_signature_type}, funder={cfg.poly_funder[:10]}...)")
+
+        client = ClobClient(
+            host=cfg.poly_clob_host,
+            chain_id=cfg.poly_chain_id,
+            key=cfg.poly_private_key,
+            signature_type=cfg.poly_signature_type,
+            funder=cfg.poly_funder or None,
+        )
+
+        # 优先使用预生成 L2 凭据；否则向 CLOB 派生
+        if cfg.poly_api_key and cfg.poly_api_secret and cfg.poly_api_passphrase:
+            creds = ApiCreds(
+                api_key=cfg.poly_api_key,
+                api_secret=cfg.poly_api_secret,
+                api_passphrase=cfg.poly_api_passphrase,
+            )
+            log_info("🔑 使用环境变量中的 L2 API 凭据")
+        else:
+            creds = client.create_or_derive_api_creds()
+            log_info("🔑 已派生 L2 API 凭据")
+        client.set_api_creds(creds)
+
+        self._clob = client
+        self._creds = creds
+
+    def _require_clob(self):
+        if self._clob is None:
+            raise RuntimeError(
+                "CLOB 客户端未初始化：请确认 TRADING_ENABLED=true、"
+                "POLY_PRIVATE_KEY/POLY_FUNDER 已配置，并安装了 py_clob_client。"
+            )
+        return self._clob
+
+    def get_tick_size(self, token_id: str) -> float:
+        """获取 token 的 tick size，失败时回退到 DEFAULT_TICK_SIZE。"""
+        try:
+            if self._clob is not None:
+                ts = self._clob.get_tick_size(token_id)
+                return float(ts)
+        except Exception as e:
+            log_warn(f"获取 tick_size 失败，使用默认 {self.DEFAULT_TICK_SIZE}: {e}")
+        return self.DEFAULT_TICK_SIZE
+
+    def get_balance_allowance(self, token_id: Optional[str] = None) -> Dict[str, Any]:
+        """查询 USDC 余额或 conditional token 余额；返回 dict。"""
+        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+        client = self._require_clob()
+        if token_id:
+            params = BalanceAllowanceParams(asset_type=AssetType.CONDITIONAL, token_id=token_id)
+        else:
+            params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+        return client.get_balance_allowance(params)
+
+    def place_order(
+        self,
+        token_id: str,
+        side: str,
+        price: float,
+        size: float,
+        order_type: str = 'GTC',
+    ) -> Dict[str, Any]:
+        """提交一笔订单到 Polymarket CLOB。
+
+        参数:
+            token_id: 目标 outcome 的 ERC1155 token id
+            side:     'buy' / 'sell' / 'BUY' / 'SELL'
+            price:    限价（0~1），会被 round 到 tick_size
+            size:     订单大小（份额数量），会被 floor 到 0.01
+            order_type: 'GTC' / 'FOK' / 'FAK' / 'GTD'
+
+        返回 dict：{'order_id', 'status', 'price', 'size', 'side', 'raw'}
+        失败会抛出异常。
+        """
+        from py_clob_client.clob_types import OrderArgs, OrderType
+        from py_clob_client.order_builder.constants import BUY, SELL
+
+        client = self._require_clob()
+        side_norm = side.upper()
+        if side_norm not in ('BUY', 'SELL'):
+            raise ValueError(f"无效 side: {side}")
+        side_const = BUY if side_norm == 'BUY' else SELL
+
+        ot = order_type.upper()
+        valid_types = ('GTC', 'FOK', 'FAK', 'GTD')
+        if ot not in valid_types:
+            raise ValueError(f"无效 order_type: {order_type}")
+        order_type_enum = getattr(OrderType, ot)
+
+        tick = self.get_tick_size(token_id)
+        rounded_price = _round_to_tick(price, tick)
+        rounded_size = _round_size(size, decimals=2)
+
+        # 校验最小订单
+        notional = rounded_price * rounded_size
+        if notional < self.MIN_ORDER_SIZE_USDC:
+            raise ValueError(
+                f"订单金额 {notional:.4f} USDC 低于最小 {self.MIN_ORDER_SIZE_USDC}"
+                f" (price={rounded_price}, size={rounded_size})"
+            )
+        if not (0 < rounded_price < 1):
+            raise ValueError(f"价格越界: {rounded_price}")
+        if rounded_size <= 0:
+            raise ValueError(f"size <= 0: {rounded_size}")
+
+        order_args = OrderArgs(
+            token_id=token_id,
+            price=rounded_price,
+            size=rounded_size,
+            side=side_const,
+        )
+        log_info(f"📤 下单: side={side_norm} price={rounded_price} size={rounded_size} "
+                 f"tick={tick} type={ot} token={token_id[:12]}...")
+
+        resp = client.create_and_post_order(order_args, order_type_enum)
+        order_id = None
+        status = None
+        if isinstance(resp, dict):
+            order_id = resp.get('orderID') or resp.get('order_id') or resp.get('id')
+            status = resp.get('status')
+        log_info(f"✅ 订单响应: order_id={order_id} status={status}")
+        return {
+            'order_id': order_id,
+            'status': status,
+            'price': rounded_price,
+            'size': rounded_size,
+            'side': side_norm,
+            'raw': resp,
+        }
+
+    def get_order(self, order_id: str) -> Dict[str, Any]:
+        """查询订单状态/成交。"""
+        client = self._require_clob()
+        return client.get_order(order_id)
+
+    def cancel_order(self, order_id: str) -> Any:
+        """撤单。"""
+        client = self._require_clob()
+        log_info(f"🛑 撤单: {order_id}")
+        return client.cancel(order_id)
+
+    # ------------------------------------------------------------------
+    # 行情
+    # ------------------------------------------------------------------
     def get_markets(self) -> List[Dict[str, Any]]:
         """Fetch markets list from CLOB"""
         try:

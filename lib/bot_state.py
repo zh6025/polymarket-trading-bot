@@ -31,6 +31,25 @@ class MarketPosition:
 
 
 @dataclass
+class OpenPosition:
+    """已下单但未结算的持仓快照。"""
+    order_id: str
+    token_id: str
+    direction: str            # 'UP' | 'DOWN'
+    entry_price: float
+    size: float               # 提交订单时的 size
+    filled_size: float = 0.0  # 实际成交 size
+    avg_fill_price: float = 0.0
+    window_open_ts: int = 0
+    window_end_ts: int = 0
+    market_slug: str = ""
+    submitted_at: float = 0.0
+    cancelled: bool = False
+    settled: bool = False
+    pnl: float = 0.0
+
+
+@dataclass
 class BotState:
     trading_enabled: bool = False
     daily_pnl: float = 0.0
@@ -42,6 +61,7 @@ class BotState:
     closed_positions: List[dict] = field(default_factory=list)
     total_pnl: float = 0.0
     circuit_breaker: bool = False
+    last_entered_window_ts: int = 0  # 持久化，避免重启后重复入场
 
     def check_daily_reset(self):
         """UTC日切时自动归零"""
@@ -80,6 +100,59 @@ class BotState:
         else:
             self.consecutive_losses = 0
         self.last_trade_time = time.time()
+
+    def record_open_position(
+        self,
+        order_id: str,
+        token_id: str,
+        direction: str,
+        entry_price: float,
+        size: float,
+        window_open_ts: int,
+        window_end_ts: int,
+        market_slug: str = "",
+    ) -> dict:
+        """记录一笔已提交但未结算的持仓，写入 open_positions。"""
+        pos = asdict(OpenPosition(
+            order_id=order_id,
+            token_id=token_id,
+            direction=direction,
+            entry_price=float(entry_price),
+            size=float(size),
+            window_open_ts=int(window_open_ts),
+            window_end_ts=int(window_end_ts),
+            market_slug=market_slug,
+            submitted_at=time.time(),
+        ))
+        self.open_positions.append(pos)
+        return pos
+
+    def find_open_position(self, order_id: str) -> Optional[dict]:
+        for p in self.open_positions:
+            if p.get('order_id') == order_id:
+                return p
+        return None
+
+    def update_open_position(self, order_id: str, **fields) -> Optional[dict]:
+        pos = self.find_open_position(order_id)
+        if pos is None:
+            return None
+        pos.update(fields)
+        return pos
+
+    def settle_position(self, order_id: str, pnl: float, won: bool) -> Optional[dict]:
+        """把 open_positions 中的某条标记为已结算并移到 closed_positions，
+        同时调用 record_trade(pnl) 更新风控计数。"""
+        pos = self.find_open_position(order_id)
+        if pos is None:
+            return None
+        pos['settled'] = True
+        pos['pnl'] = float(pnl)
+        pos['won'] = bool(won)
+        self.open_positions = [p for p in self.open_positions if p.get('order_id') != order_id]
+        self.closed_positions.append(pos)
+        self.record_trade(pnl=float(pnl))
+        return pos
 
     def save(self, path: str = "bot_state.json"):
         """原子写入"""

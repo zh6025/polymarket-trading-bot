@@ -1,5 +1,9 @@
 # Polymarket BTC 5分钟末端狙击机器人
 
+> 🚀 **不懂代码？想直接上线实盘？** 看这份小白版手册：[LIVE_TRADING_GUIDE.md](./LIVE_TRADING_GUIDE.md)
+>
+> 全程复制粘贴，约 40 分钟设置 + 1 小时模拟 + 24 小时小额验证。
+
 自动交易 Polymarket BTC Up/Down 5分钟市场，采用末端狙击策略（Kelly公式 + 动量确认），在每个5分钟窗口的末端高胜率时刻入场。
 
 ## 架构
@@ -25,7 +29,7 @@ pip install -r requirements.txt
 
 # 配置环境变量
 cp .env.example .env
-# 编辑 .env，填入 API_KEY
+# 编辑 .env，至少填入 POLY_PRIVATE_KEY 和 POLY_FUNDER（实盘必需）
 
 # 模拟运行（默认模式，不会下真实订单）
 python bot_sniper.py
@@ -34,6 +38,31 @@ python bot_sniper.py
 pip install pytest
 pytest tests/
 ```
+
+## 实盘交易上线流程
+
+> ⚠️ 上线前**务必先用 `DRY_RUN=true` 跑通至少 1 小时**，确认决策日志正常。
+
+1. **生成 Polymarket Proxy 钱包**
+   登录 https://polymarket.com → 充值 USDC.e 到你的钱包 → 在账户设置里查看 funder 地址
+2. **配置 `.env`**
+   - `POLY_PRIVATE_KEY=` 钱包私钥
+   - `POLY_FUNDER=0x...` Polymarket Proxy 地址
+   - `POLY_CHAIN_ID=137`、`POLY_SIGNATURE_TYPE=2`
+3. **链上一次性授权**（USDC + Conditional Token 对 Exchange 合约）
+   ```bash
+   python scripts/setup_allowance.py --check   # 检查授权状态
+   python scripts/setup_allowance.py           # 实际发起授权交易
+   ```
+4. **服务器对时**（末端狙击对秒级精度敏感）
+   ```bash
+   sudo apt install -y chrony
+   sudo systemctl enable --now chrony
+   chronyc tracking   # 确认偏移 < 50ms
+   ```
+5. **小额验证**：先 `BET_SIZE_USDC=5`、`DRY_RUN=false` 跑 24 小时，观察 5–10 笔订单的成交、撤单、PnL 闭环
+6. **可选：Telegram 告警** — 在 `.env` 配置 `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
+7. **状态持久化** — `STATE_FILE` 默认 `bot_state.json`，已在 `docker-compose.yml` 中挂卷
 
 ## 配置说明
 

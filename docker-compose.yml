@@ -11,9 +11,11 @@ services:
       - DRY_RUN=${DRY_RUN:-true}
       - POLLING_INTERVAL=${POLLING_INTERVAL:-5000}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - STATE_FILE=/app/data/bot_state.json
+      - LOG_DIR=/app/logs
     command: ["python", "bot_sniper.py"]
     volumes:
-      - ./bot_data.db:/app/bot_data.db
+      - ./data:/app/data
       - ./logs:/app/logs
     restart: unless-stopped
     networks:
