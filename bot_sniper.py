@@ -140,6 +140,35 @@ def _extract_up_down(event: dict):
     return _yes_price(up_m), _yes_price(down_m), _yes_token(up_m), _yes_token(down_m)
 
 
+def _live_prices(client: PolymarketClient,
+                 up_token_id: Optional[str],
+                 down_token_id: Optional[str],
+                 up_fallback: Optional[float],
+                 down_fallback: Optional[float]):
+    """从 CLOB 实时盘口拿 UP/DOWN 中间价；失败回退到 Gamma outcomePrices。
+
+    Gamma 的 outcomePrices 仅在成交时更新，5 分钟窗口前段经常几十秒不动；
+    用 CLOB midpoint 才能反映"每秒都在变"的真实挂单价。
+    """
+    up_live = None
+    down_live = None
+    if up_token_id:
+        try:
+            up_live = client.get_midpoint(up_token_id)
+        except Exception as e:
+            log_warn(f"读取 UP midpoint 失败: {e}")
+    if down_token_id:
+        try:
+            down_live = client.get_midpoint(down_token_id)
+        except Exception as e:
+            log_warn(f"读取 DOWN midpoint 失败: {e}")
+    up_price = up_live if up_live is not None else up_fallback
+    down_price = down_live if down_live is not None else down_fallback
+    src_up = "live" if up_live is not None else "gamma"
+    src_down = "live" if down_live is not None else "gamma"
+    return up_price, down_price, src_up, src_down
+
+
 def _parse_window_open_ts(event: dict) -> Optional[int]:
     """
     从市场事件数据中解析窗口开始时间戳。
@@ -228,10 +257,13 @@ class SniperBot:
 
         # 4. 如果剩余 > entry_window_high + 5s：仅记录价格，等待入场窗口
         if remaining_seconds > self.strategy.entry_window_high + 5:
-            up_price_pre, down_price_pre, _, _ = _extract_up_down(event)
+            up_gamma, down_gamma, up_tok, down_tok = _extract_up_down(event)
+            up_price_pre, down_price_pre, src_u, src_d = _live_prices(
+                self.client, up_tok, down_tok, up_gamma, down_gamma)
             up_str = f"{up_price_pre:.3f}" if up_price_pre is not None else "N/A"
             down_str = f"{down_price_pre:.3f}" if down_price_pre is not None else "N/A"
-            log_info(f"⏳ 等待入场窗口 (剩余{remaining_seconds}s) | BTC={btc_price:.2f} | UP份额={up_str} DOWN份额={down_str}")
+            log_info(f"⏳ 等待入场窗口 (剩余{remaining_seconds}s) | BTC={btc_price:.2f} | "
+                     f"UP份额={up_str}({src_u}) DOWN份额={down_str}({src_d})")
             return
 
         # 5. 检查该窗口是否已经入场过（持久化）
@@ -250,15 +282,18 @@ class SniperBot:
             return
 
         # 7. 解析市场价格（兼容单市场+2outcomes 与 双子市场两种结构）
-        up_price, down_price, up_token_id, down_token_id = _extract_up_down(event)
-        if up_price is None or down_price is None:
-            log_warn("⚠️  市场子单已关闭或价格不可读，跳过")
-            return
+        up_gamma, down_gamma, up_token_id, down_token_id = _extract_up_down(event)
         if not up_token_id or not down_token_id:
             log_warn("⚠️  未找到 UP/DOWN 的 clob token id，跳过")
             return
+        # 使用 CLOB 实时盘口 midpoint，Gamma outcomePrices 作为兜底
+        up_price, down_price, src_u, src_d = _live_prices(
+            self.client, up_token_id, down_token_id, up_gamma, down_gamma)
+        if up_price is None or down_price is None:
+            log_warn("⚠️  市场子单已关闭或价格不可读，跳过")
+            return
 
-        log_info(f"📊 价格: UP={up_price:.3f} DOWN={down_price:.3f}")
+        log_info(f"📊 价格: UP={up_price:.3f}({src_u}) DOWN={down_price:.3f}({src_d})")
 
         # 8. 获取动量
         momentum = self.feed.get_momentum(seconds=self.strategy.momentum_secs)
