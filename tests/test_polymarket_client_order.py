@@ -139,3 +139,53 @@ class TestRequireClob:
         # _clob is None because trading_enabled=False
         with pytest.raises(RuntimeError, match='CLOB'):
             pc.place_order(token_id='x', side='buy', price=0.57, size=10)
+
+
+# ---------------------------------------------------------------------------
+# get_midpoint — 实时盘口，用 mock 验证 endpoint 调用与降级路径
+# ---------------------------------------------------------------------------
+class TestGetMidpoint:
+    def _make_client(self):
+        return PolymarketClient(config=_FakeConfig())
+
+    def test_midpoint_endpoint_success(self):
+        pc = self._make_client()
+        with patch('lib.polymarket_client.requests.get') as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {'mid': '0.523'}
+            mock_get.return_value = mock_resp
+            assert pc.get_midpoint('tok-1') == 0.523
+            url = mock_get.call_args[0][0]
+            assert '/midpoint' in url and 'token_id=tok-1' in url
+
+    def test_midpoint_falls_back_to_orderbook(self):
+        pc = self._make_client()
+        with patch('lib.polymarket_client.requests.get') as mock_get, \
+             patch.object(pc, 'get_orderbook') as mock_book:
+            # /midpoint 失败
+            mock_resp = MagicMock()
+            mock_resp.status_code = 500
+            mock_get.return_value = mock_resp
+            mock_book.return_value = {
+                'bids': [{'price': '0.50', 'size': '100'}, {'price': '0.49', 'size': '50'}],
+                'asks': [{'price': '0.52', 'size': '80'}, {'price': '0.53', 'size': '40'}],
+            }
+            mid = pc.get_midpoint('tok-1')
+            assert mid == pytest.approx(0.51)
+
+    def test_midpoint_returns_none_when_all_fail(self):
+        pc = self._make_client()
+        with patch('lib.polymarket_client.requests.get', side_effect=RuntimeError('net')), \
+             patch.object(pc, 'get_orderbook', side_effect=RuntimeError('boom')):
+            assert pc.get_midpoint('tok-1') is None
+
+    def test_midpoint_rejects_out_of_range(self):
+        pc = self._make_client()
+        with patch('lib.polymarket_client.requests.get') as mock_get, \
+             patch.object(pc, 'get_orderbook', return_value={'bids': [], 'asks': []}):
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {'mid': '1.5'}  # 越界
+            mock_get.return_value = mock_resp
+            assert pc.get_midpoint('tok-1') is None

@@ -238,7 +238,57 @@ class PolymarketClient:
         except Exception as e:
             log_error(f"Failed to fetch orderbook: {e}")
             raise
-    
+
+    def get_midpoint(self, token_id: str) -> Optional[float]:
+        """获取 CLOB 实时中间价（best_bid+best_ask)/2。
+
+        - 首选 CLOB `/midpoint?token_id=...`（毫秒级反映挂撤单变化）
+        - 降级到 `/book` 用最优买卖价计算中点
+        - 全部失败返回 None；调用方应回退到 Gamma `outcomePrices`
+        """
+        try:
+            url = f"{self.BASE_URL}/midpoint?token_id={token_id}"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                mid = data.get('mid') if isinstance(data, dict) else None
+                if mid is not None:
+                    val = float(mid)
+                    if 0 < val < 1:
+                        return val
+        except Exception as e:
+            log_warn(f"midpoint 接口失败，尝试 orderbook 计算: {e}")
+
+        try:
+            book = self.get_orderbook(token_id)
+            if not isinstance(book, dict):
+                return None
+            bids = book.get('bids') or []
+            asks = book.get('asks') or []
+
+            def _best(levels, want_max):
+                best = None
+                for lvl in levels:
+                    try:
+                        p = float(lvl.get('price') if isinstance(lvl, dict) else lvl[0])
+                    except (TypeError, ValueError, IndexError, AttributeError):
+                        continue
+                    if best is None or (p > best if want_max else p < best):
+                        best = p
+                return best
+
+            best_bid = _best(bids, want_max=True)
+            best_ask = _best(asks, want_max=False)
+            if best_bid is not None and best_ask is not None:
+                mid = (best_bid + best_ask) / 2.0
+                if 0 < mid < 1:
+                    return mid
+            # 只有单边挂单时不返回伪中点，避免给出误导性价格；调用方会回退到 Gamma
+        except Exception as e:
+            log_warn(f"orderbook 计算 mid 失败: {e}")
+        return None
+
+
     def get_btc_5m_market_by_slug(self, slug: str) -> Optional[Dict]:
         """通过 Gamma API 获取 BTC 5分钟市场"""
         try:
