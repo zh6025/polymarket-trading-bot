@@ -82,7 +82,7 @@ class PolymarketClient:
             log_info("🔑 使用环境变量中的 L2 API 凭据")
         else:
             creds = client.create_or_derive_api_creds()
-            log_info(f"🔑 已派生 L2 API 凭据 (api_key={creds.api_key[:8]}...)")
+            log_info("🔑 已派生 L2 API 凭据")
         client.set_api_creds(creds)
 
         self._clob = client
