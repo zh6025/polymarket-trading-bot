@@ -51,6 +51,95 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_SEC = 5
 
 
+def _coerce_list(val):
+    """outcomes / outcomePrices / clobTokenIds 在 Gamma 返回里有时是 JSON 字符串，需要解析。"""
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return val
+    if isinstance(val, str):
+        import json as _json
+        try:
+            parsed = _json.loads(val)
+            return parsed if isinstance(parsed, list) else []
+        except (ValueError, TypeError):
+            return []
+    return []
+
+
+def _extract_up_down(event: dict):
+    """
+    从 Gamma event 里抽取 UP/DOWN 的份额价格和 CLOB token id，兼容两种结构：
+      A) 新结构：单 market，outcomes=["Up","Down"]，outcomePrices/clobTokenIds 平行数组
+      B) 旧结构：两个子 market，用 groupItemTitle 区分 UP/DOWN，outcomePrices[0] 是 YES 价
+    返回 (up_price, down_price, up_token_id, down_token_id)；缺失项为 None。
+    """
+    markets = event.get('markets', []) or []
+    active = [m for m in markets
+              if m.get('acceptingOrders', False) and not m.get('closed', True)]
+    if not active:
+        return None, None, None, None
+
+    # ---- A) 单市场 + 2 outcomes ----
+    if len(active) == 1:
+        m = active[0]
+        outcomes = _coerce_list(m.get('outcomes'))
+        prices = _coerce_list(m.get('outcomePrices'))
+        tokens = _coerce_list(m.get('clobTokenIds'))
+        up_idx = down_idx = None
+        for i, name in enumerate(outcomes):
+            n = str(name).strip().upper()
+            if n == 'UP' and up_idx is None:
+                up_idx = i
+            elif n == 'DOWN' and down_idx is None:
+                down_idx = i
+        # 默认 fallback：index 0=Up, 1=Down
+        if up_idx is None and down_idx is None and len(outcomes) >= 2:
+            up_idx, down_idx = 0, 1
+
+        def _f(arr, i):
+            if i is None or i >= len(arr):
+                return None
+            try:
+                return float(arr[i])
+            except (TypeError, ValueError):
+                return None
+
+        def _t(arr, i):
+            if i is None or i >= len(arr):
+                return None
+            return str(arr[i]) if arr[i] else None
+
+        return _f(prices, up_idx), _f(prices, down_idx), _t(tokens, up_idx), _t(tokens, down_idx)
+
+    # ---- B) 两个子市场 + groupItemTitle ----
+    up_m = next((m for m in active if 'UP' in str(m.get('groupItemTitle', '')).upper()), None)
+    down_m = next((m for m in active if 'DOWN' in str(m.get('groupItemTitle', '')).upper()), None)
+    if up_m is None and down_m is None and len(active) >= 2:
+        up_m, down_m = active[0], active[1]
+
+    def _yes_price(m):
+        if not m:
+            return None
+        prices = _coerce_list(m.get('outcomePrices'))
+        if not prices:
+            return None
+        try:
+            return float(prices[0])
+        except (TypeError, ValueError):
+            return None
+
+    def _yes_token(m):
+        if not m:
+            return None
+        tokens = _coerce_list(m.get('clobTokenIds'))
+        if not tokens:
+            return None
+        return str(tokens[0]) if tokens[0] else None
+
+    return _yes_price(up_m), _yes_price(down_m), _yes_token(up_m), _yes_token(down_m)
+
+
 def _parse_window_open_ts(event: dict) -> Optional[int]:
     """
     从市场事件数据中解析窗口开始时间戳。
@@ -139,21 +228,9 @@ class SniperBot:
 
         # 4. 如果剩余 > entry_window_high + 5s：仅记录价格，等待入场窗口
         if remaining_seconds > self.strategy.entry_window_high + 5:
-            # 读取UP/DOWN份额价格用于监控显示，失败时用N/A
-            up_str = "N/A"
-            down_str = "N/A"
-            try:
-                _markets = event.get('markets', [])
-                _up_m = next((m for m in _markets if 'UP' in m.get('groupItemTitle', '').upper()), None)
-                _down_m = next((m for m in _markets if 'DOWN' in m.get('groupItemTitle', '').upper()), None)
-                if _up_m is None and _down_m is None and len(_markets) >= 2:
-                    _up_m, _down_m = _markets[0], _markets[1]
-                if _up_m:
-                    up_str = f"{float(_up_m.get('outcomePrices', ['0.5'])[0]):.3f}"
-                if _down_m:
-                    down_str = f"{float(_down_m.get('outcomePrices', ['0.5'])[0]):.3f}"
-            except Exception:
-                pass
+            up_price_pre, down_price_pre, _, _ = _extract_up_down(event)
+            up_str = f"{up_price_pre:.3f}" if up_price_pre is not None else "N/A"
+            down_str = f"{down_price_pre:.3f}" if down_price_pre is not None else "N/A"
             log_info(f"⏳ 等待入场窗口 (剩余{remaining_seconds}s) | BTC={btc_price:.2f} | UP份额={up_str} DOWN份额={down_str}")
             return
 
@@ -172,36 +249,14 @@ class SniperBot:
             log_warn(f"⏸ 交易暂停: {reason}")
             return
 
-        # 7. 解析市场价格
-        markets = event.get('markets', [])
-        active_markets = [m for m in markets
-                          if m.get('acceptingOrders', False) and not m.get('closed', True)]
-        if not active_markets:
-            log_warn("⚠️  市场子单已关闭，跳过")
+        # 7. 解析市场价格（兼容单市场+2outcomes 与 双子市场两种结构）
+        up_price, down_price, up_token_id, down_token_id = _extract_up_down(event)
+        if up_price is None or down_price is None:
+            log_warn("⚠️  市场子单已关闭或价格不可读，跳过")
             return
-
-        up_market = None
-        down_market = None
-        for m in active_markets:
-            outcome = m.get('outcomePrices', ['0.5', '0.5'])
-            slug_lower = m.get('groupItemTitle', '').upper()
-            if 'UP' in slug_lower:
-                up_market = m
-            elif 'DOWN' in slug_lower:
-                down_market = m
-
-        # 如果无法区分UP/DOWN，用前两个市场
-        if up_market is None and len(active_markets) >= 2:
-            up_market, down_market = active_markets[0], active_markets[1]
-        elif up_market is None and len(active_markets) == 1:
-            log_warn("只找到1个子市场，跳过本周期")
+        if not up_token_id or not down_token_id:
+            log_warn("⚠️  未找到 UP/DOWN 的 clob token id，跳过")
             return
-
-        up_prices = up_market.get('outcomePrices', ['0.5', '0.5']) if up_market else ['0.5', '0.5']
-        down_prices = down_market.get('outcomePrices', ['0.5', '0.5']) if down_market else ['0.5', '0.5']
-
-        up_price = float(up_prices[0]) if up_prices else 0.5
-        down_price = float(down_prices[0]) if down_prices else 0.5
 
         log_info(f"📊 价格: UP={up_price:.3f} DOWN={down_price:.3f}")
 
@@ -246,8 +301,7 @@ class SniperBot:
 
         # 11. 执行下单
         order_id: Optional[str] = None
-        target_market = up_market if direction == 'UP' else down_market
-        token_id = target_market.get('clobTokenIds', [''])[0] if target_market else ''
+        token_id = up_token_id if direction == 'UP' else down_token_id
         if not token_id:
             log_error(f"未找到 {direction} 方向的token_id，跳过")
             return
@@ -446,24 +500,43 @@ class SniperBot:
                 log_error(f"结算异常 {order_id}: {e}")
 
     def _market_won(self, slug: str, token_id: str, direction: str) -> Optional[bool]:
-        """通过 Polymarket Gamma 接口判断该方向是否赢。"""
+        """通过 Polymarket Gamma 接口判断该方向是否赢，兼容两种市场结构。"""
         try:
             event = self.client.get_btc_5m_market_by_slug(slug)
             if not event:
                 return None
-            for m in event.get('markets', []):
-                title = m.get('groupItemTitle', '').upper()
-                if direction.upper() not in title:
+            markets = event.get('markets', []) or []
+
+            # ---- 旧结构：两个子市场，按 groupItemTitle 匹配方向，YES=index 0 ----
+            for m in markets:
+                title = str(m.get('groupItemTitle', '')).upper()
+                if not title or direction.upper() not in title:
                     continue
-                # outcomePrices 已结算时为 [1, 0] 或 [0, 1]；YES 是 index 0
-                prices = m.get('outcomePrices') or []
-                if len(prices) >= 1:
+                prices = _coerce_list(m.get('outcomePrices'))
+                if not prices:
+                    return None
+                try:
+                    yes_price = float(prices[0])
+                except (TypeError, ValueError):
+                    return None
+                return yes_price >= 0.99
+
+            # ---- 新结构：单市场 + outcomes=["Up","Down"]，按 outcome 名匹配 ----
+            for m in markets:
+                outcomes = _coerce_list(m.get('outcomes'))
+                prices = _coerce_list(m.get('outcomePrices'))
+                if not outcomes or not prices:
+                    continue
+                for i, name in enumerate(outcomes):
+                    if str(name).strip().upper() != direction.upper():
+                        continue
+                    if i >= len(prices):
+                        return None
                     try:
-                        yes_price = float(prices[0])
+                        side_price = float(prices[i])
                     except (TypeError, ValueError):
                         return None
-                    # 赢 = YES 收盘 1.0
-                    return yes_price >= 0.99
+                    return side_price >= 0.99
         except Exception as e:
             log_warn(f"_market_won 查询失败: {e}")
         return None

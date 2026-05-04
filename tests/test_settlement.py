@@ -200,3 +200,94 @@ class TestSettleFinishedWindows:
         ok, reason = bot.state.can_trade(daily_loss_limit=20)
         assert ok is False
         assert bot.state.circuit_breaker is True
+
+
+# ---------------------------------------------------------------------------
+# 新结构（单 market + 2 outcomes）兼容性
+# ---------------------------------------------------------------------------
+class TestExtractUpDown:
+    def test_single_market_two_outcomes(self):
+        from bot_sniper import _extract_up_down
+        event = {
+            'markets': [{
+                'acceptingOrders': True,
+                'closed': False,
+                'groupItemTitle': None,
+                'outcomes': ['Up', 'Down'],
+                'outcomePrices': ['0.505', '0.495'],
+                'clobTokenIds': ['tok-up', 'tok-down'],
+            }]
+        }
+        up_p, down_p, up_t, down_t = _extract_up_down(event)
+        assert up_p == 0.505
+        assert down_p == 0.495
+        assert up_t == 'tok-up'
+        assert down_t == 'tok-down'
+
+    def test_single_market_outcomes_as_json_string(self):
+        """Gamma 偶尔以 JSON 字符串返回这些字段，需要解析。"""
+        from bot_sniper import _extract_up_down
+        event = {
+            'markets': [{
+                'acceptingOrders': True,
+                'closed': False,
+                'outcomes': '["Up", "Down"]',
+                'outcomePrices': '["0.6", "0.4"]',
+                'clobTokenIds': '["a", "b"]',
+            }]
+        }
+        up_p, down_p, up_t, down_t = _extract_up_down(event)
+        assert up_p == 0.6 and down_p == 0.4
+        assert up_t == 'a' and down_t == 'b'
+
+    def test_two_submarket_legacy_shape(self):
+        from bot_sniper import _extract_up_down
+        event = {
+            'markets': [
+                {'acceptingOrders': True, 'closed': False,
+                 'groupItemTitle': 'UP', 'outcomePrices': ['0.55', '0.45'],
+                 'clobTokenIds': ['up-yes', 'up-no']},
+                {'acceptingOrders': True, 'closed': False,
+                 'groupItemTitle': 'DOWN', 'outcomePrices': ['0.42', '0.58'],
+                 'clobTokenIds': ['down-yes', 'down-no']},
+            ]
+        }
+        up_p, down_p, up_t, down_t = _extract_up_down(event)
+        assert up_p == 0.55 and down_p == 0.42
+        assert up_t == 'up-yes' and down_t == 'down-yes'
+
+    def test_no_active_markets_returns_nones(self):
+        from bot_sniper import _extract_up_down
+        event = {'markets': [
+            {'acceptingOrders': False, 'closed': True,
+             'outcomes': ['Up', 'Down'], 'outcomePrices': ['1', '0']},
+        ]}
+        assert _extract_up_down(event) == (None, None, None, None)
+
+
+class TestMarketWonNewShape:
+    def test_won_via_outcomes_array(self, tmp_path):
+        client = MagicMock()
+        # 单 market：Up 收盘 1.0
+        client.get_btc_5m_market_by_slug.return_value = {
+            'markets': [{
+                'outcomes': ['Up', 'Down'],
+                'outcomePrices': ['1', '0'],
+            }]
+        }
+        bot = _make_bot(tmp_path, client)
+        assert bot._market_won('slug-x', 'tok-up', 'UP') is True
+        assert bot._market_won('slug-x', 'tok-down', 'DOWN') is False
+
+    def test_lost_via_outcomes_array(self, tmp_path):
+        client = MagicMock()
+        client.get_btc_5m_market_by_slug.return_value = {
+            'markets': [{
+                'outcomes': ['Up', 'Down'],
+                'outcomePrices': ['0', '1'],
+            }]
+        }
+        bot = _make_bot(tmp_path, client)
+        assert bot._market_won('slug-x', 'tok-up', 'UP') is False
+        assert bot._market_won('slug-x', 'tok-down', 'DOWN') is True
+
