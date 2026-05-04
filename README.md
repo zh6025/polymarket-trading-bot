@@ -1,5 +1,9 @@
 # Polymarket BTC 5分钟末端狙击机器人
 
+> 🚀 **不懂代码？想直接上线实盘？** 看这份小白版手册：[LIVE_TRADING_GUIDE.md](./LIVE_TRADING_GUIDE.md)
+>
+> 全程复制粘贴，约 40 分钟设置 + 1 小时模拟 + 24 小时小额验证。
+
 自动交易 Polymarket BTC Up/Down 5分钟市场，采用末端狙击策略（Kelly公式 + 动量确认），在每个5分钟窗口的末端高胜率时刻入场。
 
 ## 架构
