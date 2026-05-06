@@ -379,8 +379,14 @@ class PolymarketClient:
             log_info(f"尝试市场 slug: {slug}")
             event = self.get_btc_5m_market_by_slug(slug)
             if event:
+                event_ts = self._btc_5m_slug_ts(event)
+                if event_ts is None or not self._is_btc_5m_market_time_valid(event_ts, now):
+                    remaining = (event_ts + self.BTC_5M_WINDOW_SECONDS - now) if event_ts else 'unknown'
+                    log_warn(f"市场已过期或时间无效，跳过: {event.get('slug', slug)} remaining={remaining}s")
+                    continue
                 if self._has_active_market(event):
-                    log_info(f"找到活跃市场: {event.get('title', slug)}")
+                    remaining = event_ts + self.BTC_5M_WINDOW_SECONDS - now
+                    log_info(f"找到活跃市场: {event.get('title', slug)} slug={event.get('slug', slug)} remaining={remaining}s")
                     return event
                 else:
                     log_warn(f"市场存在但已无活跃子市场，跳过: {slug}")

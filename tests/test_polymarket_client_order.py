@@ -195,3 +195,27 @@ class TestMarketData:
 
         event = pc.get_current_btc_5m_market()
         assert event['slug'] == 'btc-updown-5m-1200'
+
+    def test_current_market_skips_expired_slug_event(self, monkeypatch):
+        pc = PolymarketClient(config=_FakeConfig())
+        monkeypatch.setattr(pc, 'get_server_time', lambda: 1550)
+
+        def fake_get_by_slug(slug):
+            if slug == 'btc-updown-5m-1200':
+                return {
+                    'slug': 'btc-updown-5m-1200',
+                    'title': 'expired',
+                    'markets': [{'acceptingOrders': True, 'closed': False}],
+                }
+            if slug == 'btc-updown-5m-1500':
+                return {
+                    'slug': 'btc-updown-5m-1500',
+                    'title': 'current',
+                    'markets': [{'acceptingOrders': True, 'closed': False}],
+                }
+            return None
+
+        monkeypatch.setattr(pc, 'get_btc_5m_market_by_slug', fake_get_by_slug)
+
+        event = pc.get_current_btc_5m_market()
+        assert event['slug'] == 'btc-updown-5m-1500'

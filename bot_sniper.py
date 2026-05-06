@@ -153,6 +153,37 @@ def _parse_window_open_ts(event: dict) -> Optional[int]:
         return None
 
 
+def _format_window_ts(ts: Optional[int]) -> str:
+    if not ts:
+        return "N/A"
+    return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(ts))
+
+
+def _short_token(token_id: Optional[str]) -> str:
+    if not token_id:
+        return "N/A"
+    return f"{token_id[:10]}...{token_id[-6:]}" if len(token_id) > 20 else token_id
+
+
+def _log_market_details(event: dict, window_open_ts: Optional[int], remaining_seconds: int):
+    up_price, down_price, up_token_id, down_token_id = _extract_up_down(event)
+    markets = event.get('markets', []) or []
+    active_count = sum(1 for m in markets if m.get('acceptingOrders', False) and not m.get('closed', True))
+    up_str = f"{up_price:.3f}" if up_price is not None else "N/A"
+    down_str = f"{down_price:.3f}" if down_price is not None else "N/A"
+    window_end_ts = window_open_ts + 300 if window_open_ts else None
+    log_info(
+        "🧾 市场详情: "
+        f"title={event.get('title') or event.get('slug', 'N/A')} | "
+        f"slug={event.get('slug', 'N/A')} | "
+        f"window={_format_window_ts(window_open_ts)} → {_format_window_ts(window_end_ts)} | "
+        f"remaining={remaining_seconds}s | "
+        f"active_markets={active_count}/{len(markets)} | "
+        f"Gamma_UP={up_str} Gamma_DOWN={down_str} | "
+        f"UP_token={_short_token(up_token_id)} DOWN_token={_short_token(down_token_id)}"
+    )
+
+
 class SniperBot:
     """末端狙击机器人主控"""
 
@@ -219,6 +250,7 @@ class SniperBot:
         window_open_ts = _parse_window_open_ts(event)
         window_end_ts = window_open_ts + 300 if window_open_ts else None
         remaining_seconds = int(window_end_ts - now) if window_end_ts else 0
+        _log_market_details(event, window_open_ts, remaining_seconds)
 
         if remaining_seconds <= 0:
             log_warn(f"⏰ 窗口已结束或时间解析失败，等待新窗口 (remaining={remaining_seconds}s)")
