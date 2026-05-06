@@ -314,6 +314,17 @@ class PolymarketClient:
         except ValueError:
             return None
 
+    def _is_btc_5m_market_time_valid(self, ts: int, now: int) -> bool:
+        """Return True for current or near-future BTC 5m windows."""
+        return (
+            ts + self.BTC_5M_WINDOW_SECONDS > now - self.CLOCK_SKEW_TOLERANCE_SECONDS
+            and ts <= now + self.MAX_FUTURE_MARKET_LOOKAHEAD_SECONDS
+        )
+
+    def _distance_from_now(self, event: Dict, now: int) -> float:
+        ts = self._btc_5m_slug_ts(event)
+        return abs(ts - now) if ts is not None else float('inf')
+
     def _find_active_btc_5m_market_from_gamma(self, now: int) -> Optional[Dict]:
         """Fallback：直接从 Gamma events 列表筛选当前活跃 BTC 5m 市场。"""
         param_sets = [
@@ -328,21 +339,14 @@ class PolymarketClient:
                     continue
                 if not self._has_active_market(event):
                     continue
-                if (
-                    ts + self.BTC_5M_WINDOW_SECONDS <= now - self.CLOCK_SKEW_TOLERANCE_SECONDS
-                    or ts > now + self.MAX_FUTURE_MARKET_LOOKAHEAD_SECONDS
-                ):
+                if not self._is_btc_5m_market_time_valid(ts, now):
                     continue
                 candidates.append(event)
             if candidates:
                 break
         if not candidates:
             return None
-        def _distance_from_now(event: Dict) -> float:
-            ts = self._btc_5m_slug_ts(event)
-            return abs(ts - now) if ts is not None else float('inf')
-
-        candidates.sort(key=_distance_from_now)
+        candidates.sort(key=lambda event: self._distance_from_now(event, now))
         event = candidates[0]
         log_info(f"通过 Gamma events 列表找到活跃市场: {event.get('slug')}")
         return event

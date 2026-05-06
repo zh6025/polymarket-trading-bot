@@ -286,7 +286,7 @@ class TestLiveUpDownPrices:
         assert up_t == 'tok-up'
         assert down_t == 'tok-down'
 
-    def test_falls_back_to_gamma_price_per_side(self, tmp_path):
+    def test_falls_back_to_gamma_when_clob_midpoint_unavailable(self, tmp_path):
         client = MagicMock()
         client.get_midpoint.side_effect = [None, 0.44]
         bot = _make_bot(tmp_path, client)
