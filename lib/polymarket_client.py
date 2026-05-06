@@ -249,7 +249,7 @@ class PolymarketClient:
     def get_btc_5m_market_by_slug(self, slug: str) -> Optional[Dict]:
         """通过 Gamma API 获取 BTC 5分钟市场，兼容 path 和 query 两种 slug 路径。"""
         try:
-            slug_q = quote(slug, safe='')
+            slug_q = quote(slug, safe='-')
             urls = [
                 f"{self.GAMMA_BASE_URL}/events/slug/{slug_q}",
                 f"{self.GAMMA_BASE_URL}/events?slug={slug_q}",
@@ -381,8 +381,8 @@ class PolymarketClient:
             if event:
                 event_ts = self._btc_5m_slug_ts(event)
                 if event_ts is None or not self._is_btc_5m_market_time_valid(event_ts, now):
-                    remaining = (event_ts + self.BTC_5M_WINDOW_SECONDS - now) if event_ts else 'unknown'
-                    log_warn(f"市场已过期或时间无效，跳过: {event.get('slug', slug)} remaining={remaining}s")
+                    remaining_msg = f"{event_ts + self.BTC_5M_WINDOW_SECONDS - now}s" if event_ts else "unknown"
+                    log_warn(f"市场已过期或时间无效，跳过: {event.get('slug', slug)} remaining={remaining_msg}")
                     continue
                 if self._has_active_market(event):
                     remaining = event_ts + self.BTC_5M_WINDOW_SECONDS - now

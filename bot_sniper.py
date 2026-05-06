@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 
 # 每次轮询间隔（秒）
 POLL_INTERVAL_SEC = 5
+BTC_5M_WINDOW_SECONDS = 300
 
 
 def _coerce_list(val):
@@ -171,7 +172,7 @@ def _log_market_details(event: dict, window_open_ts: Optional[int], remaining_se
     active_count = sum(1 for m in markets if m.get('acceptingOrders', False) and not m.get('closed', True))
     up_str = f"{up_price:.3f}" if up_price is not None else "N/A"
     down_str = f"{down_price:.3f}" if down_price is not None else "N/A"
-    window_end_ts = window_open_ts + 300 if window_open_ts else None
+    window_end_ts = window_open_ts + BTC_5M_WINDOW_SECONDS if window_open_ts else None
     log_info(
         "🧾 市场详情: "
         f"title={event.get('title') or event.get('slug', 'N/A')} | "
@@ -248,7 +249,7 @@ class SniperBot:
 
         # 3. 解析窗口信息
         window_open_ts = _parse_window_open_ts(event)
-        window_end_ts = window_open_ts + 300 if window_open_ts else None
+        window_end_ts = window_open_ts + BTC_5M_WINDOW_SECONDS if window_open_ts else None
         remaining_seconds = int(window_end_ts - now) if window_end_ts else 0
         _log_market_details(event, window_open_ts, remaining_seconds)
 
