@@ -323,7 +323,7 @@ class PolymarketClient:
                     continue
                 if not self._has_active_market(event):
                     continue
-                # 保留当前/即将开始窗口，避免拿到已过期但尚未 closed 的旧事件。
+                # 300=5分钟窗口长度；30秒容忍轻微时钟偏差；900秒限制最多向前找3个窗口。
                 if ts + 300 <= now - 30 or ts > now + 900:
                     continue
                 candidates.append(event)
@@ -331,7 +331,11 @@ class PolymarketClient:
                 break
         if not candidates:
             return None
-        candidates.sort(key=lambda e: abs((self._btc_5m_slug_ts(e) or now) - now))
+        def _distance_from_now(event: Dict) -> float:
+            ts = self._btc_5m_slug_ts(event)
+            return abs(ts - now) if ts is not None else float('inf')
+
+        candidates.sort(key=_distance_from_now)
         event = candidates[0]
         log_info(f"通过 Gamma events 列表找到活跃市场: {event.get('slug')}")
         return event
