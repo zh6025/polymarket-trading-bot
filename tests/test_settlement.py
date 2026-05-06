@@ -4,7 +4,7 @@ Tests for the settlement loop in bot_sniper.py and BotState position bookkeeping
 import asyncio
 import time
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
@@ -285,6 +285,7 @@ class TestLiveUpDownPrices:
         assert down_p == 0.43
         assert up_t == 'tok-up'
         assert down_t == 'tok-down'
+        client.get_midpoint.assert_has_calls([call('tok-up'), call('tok-down')])
 
     def test_falls_back_to_gamma_when_clob_midpoint_unavailable(self, tmp_path):
         client = MagicMock()
@@ -303,6 +304,7 @@ class TestLiveUpDownPrices:
         up_p, down_p, _, _ = bot._live_up_down_prices(event)
         assert up_p == 0.56
         assert down_p == 0.44
+        client.get_midpoint.assert_has_calls([call('tok-up'), call('tok-down')])
 
 
 class TestMarketWonNewShape:
