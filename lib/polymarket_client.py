@@ -381,8 +381,12 @@ class PolymarketClient:
             if event:
                 event_ts = self._btc_5m_slug_ts(event)
                 if event_ts is None or not self._is_btc_5m_market_time_valid(event_ts, now):
-                    remaining_msg = f"{event_ts + self.BTC_5M_WINDOW_SECONDS - now}s" if event_ts else "unknown"
-                    log_warn(f"市场已过期或时间无效，跳过: {event.get('slug', slug)} remaining={remaining_msg}")
+                    if event_ts:
+                        delta = event_ts + self.BTC_5M_WINDOW_SECONDS - now
+                        time_msg = f"remaining={delta}s" if delta > 0 else f"expired_by={abs(delta)}s"
+                    else:
+                        time_msg = "remaining=unknown"
+                    log_warn(f"市场已过期或时间无效，跳过: {event.get('slug', slug)} {time_msg}")
                     continue
                 if self._has_active_market(event):
                     remaining = event_ts + self.BTC_5M_WINDOW_SECONDS - now

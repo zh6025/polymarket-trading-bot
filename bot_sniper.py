@@ -50,6 +50,9 @@ logger = logging.getLogger(__name__)
 # 每次轮询间隔（秒）
 POLL_INTERVAL_SEC = 5
 BTC_5M_WINDOW_SECONDS = 300
+TOKEN_DISPLAY_THRESHOLD = 20
+TOKEN_PREFIX_LENGTH = 10
+TOKEN_SUFFIX_LENGTH = 6
 
 
 def _coerce_list(val):
@@ -163,7 +166,9 @@ def _format_window_ts(ts: Optional[int]) -> str:
 def _short_token(token_id: Optional[str]) -> str:
     if not token_id:
         return "N/A"
-    return f"{token_id[:10]}...{token_id[-6:]}" if len(token_id) > 20 else token_id
+    if len(token_id) <= TOKEN_DISPLAY_THRESHOLD:
+        return token_id
+    return f"{token_id[:TOKEN_PREFIX_LENGTH]}...{token_id[-TOKEN_SUFFIX_LENGTH:]}"
 
 
 def _log_market_details(event: dict, window_open_ts: Optional[int], remaining_seconds: int):
@@ -405,8 +410,10 @@ class SniperBot:
             down_price = live_down
 
         if live_up is not None or live_down is not None:
-            up_str = f"{up_price:.3f}" if up_price is not None else "N/A"
-            down_str = f"{down_price:.3f}" if down_price is not None else "N/A"
+            up_src = "CLOB" if live_up is not None else "Gamma"
+            down_src = "CLOB" if live_down is not None else "Gamma"
+            up_str = f"{up_price:.3f}({up_src})" if up_price is not None else "N/A"
+            down_str = f"{down_price:.3f}({down_src})" if down_price is not None else "N/A"
             log_info(f"📡 CLOB实时价格: UP={up_str} DOWN={down_str}")
 
         return up_price, down_price, up_token_id, down_token_id
