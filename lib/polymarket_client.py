@@ -40,6 +40,11 @@ class PolymarketClient:
     # 默认 tick / 最小订单
     DEFAULT_TICK_SIZE = 0.01
     MIN_ORDER_SIZE_USDC = 5.0  # Polymarket 最小订单金额
+    BTC_5M_WINDOW_SECONDS = 300
+    # Search previous/current/next three 5-minute slugs to tolerate clock/API boundary drift.
+    MARKET_SEARCH_OFFSETS_SECONDS = [-300, 0, 300, 600, 900]
+    CLOCK_SKEW_TOLERANCE_SECONDS = 30
+    MAX_FUTURE_MARKET_LOOKAHEAD_SECONDS = 900
 
     def __init__(self, config: Optional[Config] = None):
         self.client = APIClient(base_url=self.BASE_URL)
@@ -323,8 +328,10 @@ class PolymarketClient:
                     continue
                 if not self._has_active_market(event):
                     continue
-                # 300=5分钟窗口长度；30秒容忍轻微时钟偏差；900秒限制最多向前找3个窗口。
-                if ts + 300 <= now - 30 or ts > now + 900:
+                if (
+                    ts + self.BTC_5M_WINDOW_SECONDS <= now - self.CLOCK_SKEW_TOLERANCE_SECONDS
+                    or ts > now + self.MAX_FUTURE_MARKET_LOOKAHEAD_SECONDS
+                ):
                     continue
                 candidates.append(event)
             if candidates:
@@ -362,8 +369,8 @@ class PolymarketClient:
         """获取当前活跃的 BTC 5分钟市场（以Polymarket时间为准，不依赖本地时间���算）"""
         now = self.get_server_time()
         # 先按 slug 精确找；包含 -300 秒以兼容 Polymarket 窗口起点/服务器时间轻微偏差。
-        for offset in [-300, 0, 300, 600, 900]:
-            nearest_5min = (now + offset) - ((now + offset) % 300)
+        for offset in self.MARKET_SEARCH_OFFSETS_SECONDS:
+            nearest_5min = (now + offset) - ((now + offset) % self.BTC_5M_WINDOW_SECONDS)
             slug = f"btc-updown-5m-{nearest_5min}"
             log_info(f"尝试市场 slug: {slug}")
             event = self.get_btc_5m_market_by_slug(slug)
