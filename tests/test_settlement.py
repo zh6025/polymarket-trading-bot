@@ -265,6 +265,46 @@ class TestExtractUpDown:
         assert _extract_up_down(event) == (None, None, None, None)
 
 
+class TestLiveUpDownPrices:
+    def test_uses_clob_midpoint_when_available(self, tmp_path):
+        client = MagicMock()
+        client.get_midpoint.side_effect = [0.57, 0.43]
+        bot = _make_bot(tmp_path, client)
+        event = {
+            'markets': [{
+                'acceptingOrders': True,
+                'closed': False,
+                'outcomes': ['Up', 'Down'],
+                'outcomePrices': ['0.50', '0.50'],
+                'clobTokenIds': ['tok-up', 'tok-down'],
+            }]
+        }
+
+        up_p, down_p, up_t, down_t = bot._live_up_down_prices(event)
+        assert up_p == 0.57
+        assert down_p == 0.43
+        assert up_t == 'tok-up'
+        assert down_t == 'tok-down'
+
+    def test_falls_back_to_gamma_price_per_side(self, tmp_path):
+        client = MagicMock()
+        client.get_midpoint.side_effect = [None, 0.44]
+        bot = _make_bot(tmp_path, client)
+        event = {
+            'markets': [{
+                'acceptingOrders': True,
+                'closed': False,
+                'outcomes': ['Up', 'Down'],
+                'outcomePrices': ['0.56', '0.44'],
+                'clobTokenIds': ['tok-up', 'tok-down'],
+            }]
+        }
+
+        up_p, down_p, _, _ = bot._live_up_down_prices(event)
+        assert up_p == 0.56
+        assert down_p == 0.44
+
+
 class TestMarketWonNewShape:
     def test_won_via_outcomes_array(self, tmp_path):
         client = MagicMock()
@@ -290,4 +330,3 @@ class TestMarketWonNewShape:
         bot = _make_bot(tmp_path, client)
         assert bot._market_won('slug-x', 'tok-up', 'UP') is False
         assert bot._market_won('slug-x', 'tok-down', 'DOWN') is True
-

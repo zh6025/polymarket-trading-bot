@@ -139,3 +139,59 @@ class TestRequireClob:
         # _clob is None because trading_enabled=False
         with pytest.raises(RuntimeError, match='CLOB'):
             pc.place_order(token_id='x', side='buy', price=0.57, size=10)
+
+
+class TestMarketData:
+    def test_get_midpoint_uses_clob_midpoint(self):
+        pc = PolymarketClient(config=_FakeConfig())
+        pc.client.get = MagicMock(return_value={'mid': '0.573'})
+
+        assert pc.get_midpoint('token-1') == 0.573
+        pc.client.get.assert_called_once_with('https://clob.polymarket.com/midpoint?token_id=token-1')
+
+    def test_get_midpoint_falls_back_to_orderbook(self):
+        pc = PolymarketClient(config=_FakeConfig())
+        pc.client.get = MagicMock(side_effect=RuntimeError('midpoint unavailable'))
+        pc.get_orderbook = MagicMock(return_value={
+            'bids': [{'price': '0.54'}],
+            'asks': [{'price': '0.58'}],
+        })
+
+        assert pc.get_midpoint('token-1') == pytest.approx(0.56)
+
+    def test_get_market_by_slug_falls_back_to_query_path(self, monkeypatch):
+        pc = PolymarketClient(config=_FakeConfig())
+
+        class _Resp:
+            def __init__(self, status_code, payload):
+                self.status_code = status_code
+                self._payload = payload
+
+            def json(self):
+                return self._payload
+
+        calls = []
+
+        def fake_get(url, **kwargs):
+            calls.append(url)
+            if '/events/slug/' in url:
+                return _Resp(404, {})
+            return _Resp(200, [{'slug': 'btc-updown-5m-1000', 'markets': []}])
+
+        monkeypatch.setattr('lib.polymarket_client.requests.get', fake_get)
+
+        event = pc.get_btc_5m_market_by_slug('btc-updown-5m-1000')
+        assert event['slug'] == 'btc-updown-5m-1000'
+        assert len(calls) == 2
+
+    def test_current_market_uses_gamma_events_fallback(self, monkeypatch):
+        pc = PolymarketClient(config=_FakeConfig())
+        monkeypatch.setattr(pc, 'get_server_time', lambda: 1300)
+        monkeypatch.setattr(pc, 'get_btc_5m_market_by_slug', lambda slug: None)
+        monkeypatch.setattr(pc, '_fetch_gamma_events', lambda params: [{
+            'slug': 'btc-updown-5m-1200',
+            'markets': [{'acceptingOrders': True, 'closed': False}],
+        }])
+
+        event = pc.get_current_btc_5m_market()
+        assert event['slug'] == 'btc-updown-5m-1200'

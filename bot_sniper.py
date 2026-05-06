@@ -228,7 +228,7 @@ class SniperBot:
 
         # 4. 如果剩余 > entry_window_high + 5s：仅记录价格，等待入场窗口
         if remaining_seconds > self.strategy.entry_window_high + 5:
-            up_price_pre, down_price_pre, _, _ = _extract_up_down(event)
+            up_price_pre, down_price_pre, _, _ = self._live_up_down_prices(event)
             up_str = f"{up_price_pre:.3f}" if up_price_pre is not None else "N/A"
             down_str = f"{down_price_pre:.3f}" if down_price_pre is not None else "N/A"
             log_info(f"⏳ 等待入场窗口 (剩余{remaining_seconds}s) | BTC={btc_price:.2f} | UP份额={up_str} DOWN份额={down_str}")
@@ -250,7 +250,7 @@ class SniperBot:
             return
 
         # 7. 解析市场价格（兼容单市场+2outcomes 与 双子市场两种结构）
-        up_price, down_price, up_token_id, down_token_id = _extract_up_down(event)
+        up_price, down_price, up_token_id, down_token_id = self._live_up_down_prices(event)
         if up_price is None or down_price is None:
             log_warn("⚠️  市场子单已关闭或价格不可读，跳过")
             return
@@ -359,6 +359,24 @@ class SniperBot:
         self.state.save(self.config.state_file)
         log_info(f"💾 入场记录已保存 | 今日交易={self.state.daily_trade_count} "
                  f"今日PnL=${self.state.daily_pnl:.2f}")
+
+    def _live_up_down_prices(self, event: dict):
+        """从 Gamma 取 token id，再用 CLOB midpoint 获取实时 UP/DOWN 价格。"""
+        up_price, down_price, up_token_id, down_token_id = _extract_up_down(event)
+
+        live_up = self.client.get_midpoint(up_token_id) if up_token_id else None
+        live_down = self.client.get_midpoint(down_token_id) if down_token_id else None
+        if live_up is not None:
+            up_price = live_up
+        if live_down is not None:
+            down_price = live_down
+
+        if live_up is not None or live_down is not None:
+            up_str = f"{up_price:.3f}" if up_price is not None else "N/A"
+            down_str = f"{down_price:.3f}" if down_price is not None else "N/A"
+            log_info(f"📡 CLOB实时价格: UP={up_str} DOWN={down_str}")
+
+        return up_price, down_price, up_token_id, down_token_id
 
     # ------------------------------------------------------------------
     # 余额 / 订单生命周期 / 结算

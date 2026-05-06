@@ -1,5 +1,6 @@
-﻿import requests
+import requests
 import time
+from urllib.parse import quote
 from lib.utils import APIClient, log_info, log_error, log_warn
 from lib.config import Config
 from typing import Dict, List, Optional, Any
@@ -34,6 +35,7 @@ class PolymarketClient:
     """
 
     BASE_URL = "https://clob.polymarket.com"
+    GAMMA_BASE_URL = "https://gamma-api.polymarket.com"
 
     # 默认 tick / 最小订单
     DEFAULT_TICK_SIZE = 0.01
@@ -240,18 +242,99 @@ class PolymarketClient:
             raise
     
     def get_btc_5m_market_by_slug(self, slug: str) -> Optional[Dict]:
-        """通过 Gamma API 获取 BTC 5分钟市场"""
+        """通过 Gamma API 获取 BTC 5分钟市场，兼容 path 和 query 两种 slug 路径。"""
         try:
-            url = f"https://gamma-api.polymarket.com/events/slug/{slug}"
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                if data and isinstance(data, dict):
-                    return data
+            slug_q = quote(slug, safe='')
+            urls = [
+                f"{self.GAMMA_BASE_URL}/events/slug/{slug_q}",
+                f"{self.GAMMA_BASE_URL}/events?slug={slug_q}",
+            ]
+            for url in urls:
+                response = requests.get(url, timeout=10)
+                if response.status_code != 200:
+                    log_warn(f"Gamma slug 查询失败 status={response.status_code} url={url}")
+                    continue
+                event = self._extract_gamma_event(response.json())
+                if event:
+                    return event
             return None
         except Exception as e:
             log_error(f"Failed to fetch market by slug: {e}")
             return None
+
+    @staticmethod
+    def _extract_gamma_event(data: Any) -> Optional[Dict]:
+        """Gamma /events/slug 返回 dict，/events?slug= 返回 list 或 {'data': [...]}。"""
+        if isinstance(data, dict):
+            if data.get('slug') or data.get('markets'):
+                return data
+            events = data.get('data') or data.get('events')
+            if isinstance(events, list) and events:
+                return events[0] if isinstance(events[0], dict) else None
+        if isinstance(data, list) and data:
+            return data[0] if isinstance(data[0], dict) else None
+        return None
+
+    def _fetch_gamma_events(self, params: Dict[str, Any]) -> List[Dict]:
+        """Fetch a Gamma events page and normalize common response shapes to a list."""
+        try:
+            response = requests.get(f"{self.GAMMA_BASE_URL}/events", params=params, timeout=10)
+            if response.status_code != 200:
+                log_warn(f"Gamma events 查询失败 status={response.status_code} params={params}")
+                return []
+            data = response.json()
+            if isinstance(data, list):
+                return [e for e in data if isinstance(e, dict)]
+            if isinstance(data, dict):
+                events = data.get('data') or data.get('events') or []
+                if isinstance(events, list):
+                    return [e for e in events if isinstance(e, dict)]
+            return []
+        except Exception as e:
+            log_warn(f"Gamma events 查询异常: {e}")
+            return []
+
+    @staticmethod
+    def _has_active_market(event: Dict) -> bool:
+        markets = event.get('markets', []) or []
+        return any(m.get('acceptingOrders', False) and not m.get('closed', True) for m in markets)
+
+    @staticmethod
+    def _btc_5m_slug_ts(event: Dict) -> Optional[int]:
+        slug = str(event.get('slug', ''))
+        if not slug.startswith('btc-updown-5m-'):
+            return None
+        try:
+            return int(slug.rsplit('-', 1)[-1])
+        except ValueError:
+            return None
+
+    def _find_active_btc_5m_market_from_gamma(self, now: int) -> Optional[Dict]:
+        """Fallback：直接从 Gamma events 列表筛选当前活跃 BTC 5m 市场。"""
+        param_sets = [
+            {'closed': 'false', 'active': 'true', 'archived': 'false', 'limit': 100},
+            {'closed': 'false', 'limit': 100},
+        ]
+        candidates: List[Dict] = []
+        for params in param_sets:
+            for event in self._fetch_gamma_events(params):
+                ts = self._btc_5m_slug_ts(event)
+                if ts is None:
+                    continue
+                if not self._has_active_market(event):
+                    continue
+                # 保留当前/即将开始窗口，避免拿到已过期但尚未 closed 的旧事件。
+                if ts + 300 <= now - 30 or ts > now + 900:
+                    continue
+                candidates.append(event)
+            if candidates:
+                break
+        if not candidates:
+            return None
+        candidates.sort(key=lambda e: abs((self._btc_5m_slug_ts(e) or now) - now))
+        event = candidates[0]
+        log_info(f"通过 Gamma events 列表找到活跃市场: {event.get('slug')}")
+        return event
 
     def get_server_time(self) -> int:
         """从Polymarket API响应头获取服务器时间，失败则用本地时间"""
@@ -274,23 +357,47 @@ class PolymarketClient:
     def get_current_btc_5m_market(self) -> Optional[Dict]:
         """获取当前活跃的 BTC 5分钟市场（以Polymarket时间为准，不依赖本地时间���算）"""
         now = self.get_server_time()
-        # 只向未来找：offset=0是当前窗口，+300是下一个窗口，不往过去找（已结算）
-        for offset in [0, 300, 600]:
+        # 先按 slug 精确找；包含 -300 秒以兼容 Polymarket 窗口起点/服务器时间轻微偏差。
+        for offset in [-300, 0, 300, 600, 900]:
             nearest_5min = (now + offset) - ((now + offset) % 300)
             slug = f"btc-updown-5m-{nearest_5min}"
             log_info(f"尝试市场 slug: {slug}")
             event = self.get_btc_5m_market_by_slug(slug)
             if event:
-                markets = event.get('markets', [])
-                # 必须 acceptingOrders=True 且未关闭
-                active = [m for m in markets if m.get('acceptingOrders', False) and not m.get('closed', True)]
-                if active:
+                if self._has_active_market(event):
                     log_info(f"找到活跃市场: {event.get('title', slug)}")
                     return event
                 else:
                     log_warn(f"市场存在但已无活跃子市场，跳过: {slug}")
+        fallback = self._find_active_btc_5m_market_from_gamma(now)
+        if fallback:
+            return fallback
         log_error("未找到任何活跃的BTC 5分钟市场")
         return None
+
+    def get_midpoint(self, token_id: str) -> Optional[float]:
+        """获取 CLOB 实时 midpoint；失败时回退到 /book 计算 bid/ask mid。"""
+        if not token_id:
+            return None
+        try:
+            response = self.client.get(f"{self.BASE_URL}/midpoint?token_id={token_id}")
+            if isinstance(response, dict):
+                raw_mid = response.get('mid') or response.get('midpoint')
+                if raw_mid is not None:
+                    mid = float(raw_mid)
+                    if 0 < mid < 1:
+                        return mid
+        except Exception as e:
+            log_warn(f"获取 CLOB midpoint 失败，回退 orderbook: {e}")
+
+        try:
+            book = self.get_orderbook(token_id)
+            mid_data = self.calculate_mid_price(book)
+            mid = mid_data.get('mid')
+            return float(mid) if mid is not None else None
+        except Exception as e:
+            log_warn(f"通过 orderbook 计算 midpoint 失败: {e}")
+            return None
 
     def calculate_mid_price(self, book: Dict[str, Any]) -> Dict[str, float]:
         """Calculate bid/ask/mid from orderbook"""
