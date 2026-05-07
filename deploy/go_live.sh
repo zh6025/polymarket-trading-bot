@@ -4,6 +4,7 @@
 # 用法：
 #   bash deploy/go_live.sh check       # 只检查环境，不动任何东西
 #   bash deploy/go_live.sh dry         # 切换到 DRY_RUN 模式启动（推荐先跑 1 小时）
+#   bash deploy/go_live.sh preflight   # 实盘前检查 DRY_RUN 日志 / 状态 / 参数
 #   bash deploy/go_live.sh live        # 切换到实盘模式启动（小心！会真实下单）
 #   bash deploy/go_live.sh stop        # 停止机器人
 #   bash deploy/go_live.sh logs        # 实时看日志（Ctrl+C 退出）
@@ -38,6 +39,11 @@ require_env_var() {
         return 1
     fi
     return 0
+}
+
+get_env_value() {
+    local key="$1"
+    grep -E "^${key}=" .env 2>/dev/null | tail -n 1 | cut -d= -f2-
 }
 
 cmd_check() {
@@ -120,6 +126,140 @@ except Exception as e:
     ok "检查完成"
 }
 
+cmd_preflight() {
+    info "===== 实盘前检查（DRY_RUN / 日志 / 状态 / 参数）====="
+    local failed=0
+
+    if [ ! -f .env ]; then
+        err "找不到 .env 文件！请先复制 .env.example 为 .env 并填好"
+        exit 1
+    fi
+
+    info "===== 1) 检查小额实盘参数 ====="
+    local dry_run trading_enabled bet_size chain_id signature_type
+    dry_run=$(get_env_value DRY_RUN)
+    trading_enabled=$(get_env_value TRADING_ENABLED)
+    bet_size=$(get_env_value BET_SIZE_USDC)
+    chain_id=$(get_env_value POLY_CHAIN_ID)
+    signature_type=$(get_env_value POLY_SIGNATURE_TYPE)
+
+    if [ "$trading_enabled" = "true" ]; then
+        ok "TRADING_ENABLED=true"
+    else
+        err "TRADING_ENABLED 应为 true，当前: ${trading_enabled:-未设置}"
+        failed=1
+    fi
+    if [ "$dry_run" = "true" ]; then
+        ok "DRY_RUN=true（实盘前应先完成模拟验证）"
+    else
+        err "实盘前请先保持 DRY_RUN=true 完成模拟验证，当前: ${dry_run:-未设置}"
+        failed=1
+    fi
+    if [ "$bet_size" = "1" ] || [ "$bet_size" = "1.0" ]; then
+        ok "BET_SIZE_USDC=${bet_size}"
+    else
+        err "首次实盘建议 BET_SIZE_USDC=1.0，当前: ${bet_size:-未设置}"
+        failed=1
+    fi
+    if [ "$chain_id" = "137" ]; then
+        ok "POLY_CHAIN_ID=137"
+    else
+        err "POLY_CHAIN_ID 应为 137，当前: ${chain_id:-未设置}"
+        failed=1
+    fi
+    if [ "$signature_type" = "2" ]; then
+        ok "POLY_SIGNATURE_TYPE=2"
+    elif [ "$signature_type" = "1" ]; then
+        warn "POLY_SIGNATURE_TYPE=1；仅 Email/MagicLink Proxy 账户应使用 1"
+    else
+        err "POLY_SIGNATURE_TYPE 应为 2（或确认为 Email/MagicLink 时用 1），当前: ${signature_type:-未设置}"
+        failed=1
+    fi
+
+    info "===== 2) 检查实盘凭据存在 ====="
+    require_env_var POLY_PRIVATE_KEY || failed=1
+    require_env_var POLY_FUNDER || failed=1
+
+    info "===== 3) 检查时间同步 ====="
+    if command -v chronyc >/dev/null 2>&1; then
+        chronyc tracking 2>/dev/null | grep -E "System time|Last offset|RMS offset" || warn "chronyc tracking 输出异常"
+        ok "chrony 已安装"
+    elif command -v timedatectl >/dev/null 2>&1; then
+        if timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -qi true; then
+            ok "系统 NTP 同步已启用"
+        else
+            err "系统 NTP 未同步；5 分钟市场对时间敏感，请先安装/启用 chrony"
+            failed=1
+        fi
+    else
+        err "无法检查时间同步；请安装 chrony 并确认 offset 为毫秒级"
+        failed=1
+    fi
+
+    info "===== 4) 检查最近 1 小时 DRY_RUN 日志 ====="
+    local log_file="${TMPDIR:-/tmp}/polymarket_go_live_preflight.log"
+    if docker compose logs --since=1h --tail=3000 bot >"$log_file" 2>/dev/null; then
+        if grep -q "🔬 DRY-RUN:" "$log_file"; then
+            ok "最近 1 小时日志中出现过 DRY-RUN 入场决策"
+        else
+            err "最近 1 小时日志中没有找到 '🔬 DRY-RUN:'；请继续 DRY_RUN 跑满并等到至少 1 次入场决策"
+            failed=1
+        fi
+        if grep -E "ERROR|余额不足|授权不足|下单失败|未找到 .*token_id|未找到 token_id" "$log_file"; then
+            err "最近 1 小时日志中发现错误/余额/授权/token_id 异常，请先处理"
+            failed=1
+        else
+            ok "最近 1 小时日志未发现 ERROR / 余额不足 / 授权不足 / 下单失败 / token_id 异常"
+        fi
+    else
+        err "无法读取 docker 日志；请确认 bot 容器已运行并已完成 DRY_RUN"
+        failed=1
+    fi
+
+    info "===== 5) 检查熔断器状态 ====="
+    if [ -f data/bot_state.json ]; then
+        if python3 - <<'PY'
+import json
+import sys
+
+with open('data/bot_state.json', encoding='utf-8') as f:
+    state = json.load(f)
+if state.get('circuit_breaker', False):
+    print('circuit_breaker=True')
+    sys.exit(1)
+print('circuit_breaker=False')
+PY
+        then
+            ok "circuit_breaker=False"
+        else
+            err "熔断器已触发，请先排查状态/PnL 后再实盘"
+            failed=1
+        fi
+    else
+        err "找不到 data/bot_state.json；请先完成 DRY_RUN 并确认状态文件已写入"
+        failed=1
+    fi
+
+    info "===== 6) 检查链上余额/授权（只读）====="
+    if [ -f scripts/setup_allowance.py ]; then
+        if docker compose run --rm bot python3 scripts/setup_allowance.py --check; then
+            ok "链上授权检查通过"
+        else
+            err "链上余额/授权检查未通过；请先执行: docker compose run --rm bot python3 scripts/setup_allowance.py"
+            failed=1
+        fi
+    else
+        warn "未找到 scripts/setup_allowance.py，跳过链上授权检查"
+    fi
+
+    if [ "$failed" -eq 0 ]; then
+        ok "实盘前检查通过。下一步可执行: bash deploy/go_live.sh live"
+    else
+        err "实盘前检查未通过，请先处理上面的 ❌ 项"
+        exit 1
+    fi
+}
+
 cmd_dry() {
     info "===== 切换到 DRY_RUN 模式（不下真实单）====="
     cmd_check
@@ -134,7 +274,7 @@ cmd_dry() {
 
 cmd_live() {
     info "===== ⚠️ 切换到实盘模式 ⚠️ ====="
-    cmd_check
+    cmd_preflight
     echo
     warn "实盘会真实下单消耗你的 USDC！"
     warn "建议把 BET_SIZE_USDC 设为 1（最小试单）"
@@ -174,9 +314,10 @@ cmd_status() {
 case "$ACTION" in
     check)  cmd_check ;;
     dry)    cmd_dry ;;
+    preflight) cmd_preflight ;;
     live)   cmd_live ;;
     stop)   cmd_stop ;;
     logs)   cmd_logs ;;
     status) cmd_status ;;
-    *)      echo "用法: bash deploy/go_live.sh {check|dry|live|stop|logs|status}"; exit 1 ;;
+    *)      echo "用法: bash deploy/go_live.sh {check|dry|preflight|live|stop|logs|status}"; exit 1 ;;
 esac

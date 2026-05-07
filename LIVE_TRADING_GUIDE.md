@@ -217,10 +217,21 @@ bash deploy/go_live.sh logs
 
 ### 7.4 1 小时后的检查清单
 
-- [ ] 日志里没有 `ERROR` 级别的异常
-- [ ] 至少看到 1 次 `🔬 DRY-RUN: UP/DOWN @ ...` 的入场决策
-- [ ] `bash deploy/go_live.sh status` 显示 `circuit_breaker: False`
-- [ ] 没有 `余额不足 / 授权不足` 的告警
+先执行自动检查：
+
+```bash
+bash deploy/go_live.sh preflight
+```
+
+它会检查：
+
+- [ ] `.env` 仍是 `DRY_RUN=true`、`TRADING_ENABLED=true`、`BET_SIZE_USDC=1`
+- [ ] Polymarket 私钥 / funder / chain_id / signature_type 已配置
+- [ ] 时间同步正常
+- [ ] 最近 1 小时日志里至少出现 1 次 `🔬 DRY-RUN: UP/DOWN @ ...` 入场决策
+- [ ] 最近 1 小时日志里没有 `ERROR`、`余额不足`、`授权不足`、`下单失败`、`未找到 token_id`
+- [ ] `data/bot_state.json` 显示 `circuit_breaker: False`
+- [ ] 链上余额/授权检查通过
 
 如果上面全过 → 进入第 8 步。
 如果有问题 → 截图发给我或停下来 (`bash deploy/go_live.sh stop`)。
@@ -229,9 +240,9 @@ bash deploy/go_live.sh logs
 
 ## 第 8 步：⚠️ 实盘小额验证 24 小时
 
-> 从这一步开始，机器人会**真实花你钱**！默认每单 5 USDC（最小）。
+> 从这一步开始，机器人会**真实花你钱**！首次建议默认每单 1 USDC（Polymarket 最小订单金额）。
 > 一天大概 200~500 个 BTC 5 分钟窗口，所以 24 小时可能下 5~50 单。
-> 即使全部输光，最多损失也就 100~250 USDC。
+> 即使全部输光，按 1 USDC 小额验证通常最多损失约 5~50 USDC。
 
 ### 8.1 切到实盘
 
@@ -239,7 +250,7 @@ bash deploy/go_live.sh logs
 bash deploy/go_live.sh live
 ```
 
-它会让你输入 `YES I AM SURE` 才启动。这是故意的"反误触保险"。
+它会先自动执行 `preflight` 检查，通过后才会让你输入 `YES I AM SURE` 启动。这是故意的"反误触保险"。
 
 ### 8.2 监控建议
 
@@ -315,6 +326,9 @@ bash deploy/go_live.sh dry
 
 # 实盘启动（要敲 YES I AM SURE 确认）
 bash deploy/go_live.sh live
+
+# 实盘前自动检查
+bash deploy/go_live.sh preflight
 
 # 停机器人
 bash deploy/go_live.sh stop
