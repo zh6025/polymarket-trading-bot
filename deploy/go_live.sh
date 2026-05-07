@@ -137,7 +137,7 @@ cmd_live() {
     cmd_check
     echo
     warn "实盘会真实下单消耗你的 USDC！"
-    warn "建议把 BET_SIZE_USDC 设为 5（最小试单）"
+    warn "建议把 BET_SIZE_USDC 设为 1（最小试单）"
     read -r -p "确认继续？输入 'YES I AM SURE' 才会启动: " ans
     if [ "$ans" != "YES I AM SURE" ]; then
         err "已取消"
@@ -147,7 +147,7 @@ cmd_live() {
     sed -i.bak -E 's/^DRY_RUN=.*/DRY_RUN=false/' .env
     sed -i.bak -E 's/^TRADING_ENABLED=.*/TRADING_ENABLED=true/' .env
     if ! grep -qE '^BET_SIZE_USDC=' .env; then
-        echo "BET_SIZE_USDC=5" >> .env
+        echo "BET_SIZE_USDC=1" >> .env
     fi
     grep -E '^(DRY_RUN|TRADING_ENABLED|BET_SIZE_USDC)=' .env || true
     info "===== 启动 bot ====="

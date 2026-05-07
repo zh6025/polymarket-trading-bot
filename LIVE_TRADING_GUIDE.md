@@ -113,7 +113,7 @@ POLY_SIGNATURE_TYPE=2
 ```
 TRADING_ENABLED=true
 DRY_RUN=true
-BET_SIZE_USDC=5
+BET_SIZE_USDC=1
 ```
 
 ### 4.5 保存退出
@@ -210,7 +210,7 @@ bash deploy/go_live.sh logs
 [INFO] 🔑 已派生 L2 API 凭据
 [INFO] 当前窗口: 剩余 134s, UP=0.52, DOWN=0.48
 ...
-[INFO] 🔬 DRY-RUN: UP @ 0.570 x 8.7720 份额 (~5.00 USDC, 跳过真实下单)
+[INFO] 🔬 DRY-RUN: UP @ 0.570 x 1.7543 份额 (~1.00 USDC, 跳过真实下单)
 ```
 
 **至少跑满 1 小时**（5 分钟一个窗口，能见到约 12 次决策）。每隔 15 分钟用 `bash deploy/go_live.sh status` 看一眼状态。

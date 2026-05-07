@@ -61,7 +61,7 @@ pytest tests/
    chronyc tracking   # 确认偏移 < 50ms
    ```
 5. **上线前日志确认**：重建并重启容器后，确认日志出现 `🧾 市场详情`、当前 slug 的 `remaining` 为正数，且不会把已过期窗口打印成 `找到活跃市场`
-6. **小额验证**：先 `BET_SIZE_USDC=5`、`DRY_RUN=false` 跑 24 小时，观察 5–10 笔订单的成交、撤单、PnL 闭环
+6. **小额验证**：先 `BET_SIZE_USDC=1`、`DRY_RUN=false` 跑 24 小时，观察 5–10 笔订单的成交、撤单、PnL 闭环
 7. **可选：Telegram 告警** — 在 `.env` 配置 `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
 8. **状态持久化** — `STATE_FILE` 默认 `bot_state.json`，已在 `docker-compose.yml` 中挂卷
 
@@ -71,7 +71,7 @@ pytest tests/
 |------|--------|------|
 | `TRADING_ENABLED` | `false` | ⚠️ 必须显式设为 true 才能真实交易 |
 | `DRY_RUN` | `true` | 模拟模式（不提交订单） |
-| `BET_SIZE_USDC` | `5.0` | 每次下注金额（USDC；低于 Polymarket 最小订单金额会下单失败） |
+| `BET_SIZE_USDC` | `1.0` | 每次下注金额（USDC；低于 Polymarket 最小订单金额会下单失败） |
 | `DAILY_LOSS_LIMIT_USDC` | `20` | 每日最大亏损触发熔断 |
 | `DAILY_TRADE_LIMIT` | `20` | 每日最大交易次数 |
 | `CONSECUTIVE_LOSS_LIMIT` | `3` | 连续亏损上限 |

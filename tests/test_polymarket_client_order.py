@@ -100,9 +100,14 @@ class TestPlaceOrder:
 
     def test_below_min_notional_raises(self, client_with_mock_clob):
         pc, _ = client_with_mock_clob
-        # 0.5 × 5 = 2.5 USDC < 5
+        # 0.5 × 1 = 0.5 USDC < 1
         with pytest.raises(ValueError, match='最小'):
-            pc.place_order(token_id='x', side='buy', price=0.5, size=5)
+            pc.place_order(token_id='x', side='buy', price=0.5, size=1)
+
+    def test_one_usdc_notional_is_allowed(self, client_with_mock_clob):
+        pc, _ = client_with_mock_clob
+        result = pc.place_order(token_id='x', side='buy', price=0.5, size=2)
+        assert result['price'] * result['size'] == 1.0
 
     def test_price_out_of_range_raises(self, client_with_mock_clob):
         pc, _ = client_with_mock_clob
