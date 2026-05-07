@@ -422,7 +422,7 @@ class SniperBot:
     # 余额 / 订单生命周期 / 结算
     # ------------------------------------------------------------------
     def _check_balance(self, required_usdc: float) -> bool:
-        """下单前检查 USDC 余额；不足则告警并跳过本次下单。"""
+        """下单前检查 USDC 余额；不足或检查失败则告警并跳过本次下单。"""
         try:
             ba = self.client.get_balance_allowance()
             # py_clob_client 通常返回 {'balance': '...', 'allowance': '...'}（USDC 6 位小数）
@@ -445,8 +445,10 @@ class SniperBot:
                 return False
             return True
         except Exception as e:
-            log_warn(f"余额检查失败（继续下单）: {e}")
-            return True
+            msg = f"余额检查失败，跳过下单: {e}"
+            log_error(msg)
+            self.notifier.notify(msg, level='error')
+            return False
 
     async def _monitor_order(self, order_id: str, window_end_ts: int):
         """下单后短轮询：每 1s 查询，未成交且接近窗口结束就撤单。"""

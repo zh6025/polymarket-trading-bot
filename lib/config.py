@@ -54,7 +54,7 @@ class Config:
         self.min_depth = float(self.get_env_variable('MIN_DEPTH', required=False, default='50'))
 
         # 下注规模（USDC）
-        self.bet_size_usdc = float(self.get_env_variable('BET_SIZE_USDC', required=False, default='3.0'))
+        self.bet_size_usdc = float(self.get_env_variable('BET_SIZE_USDC', required=False, default='5.0'))
 
         # ---- 末端狙击策略配置 ----
         self.sniper_entry_secs = int(self.get_env_variable('SNIPER_ENTRY_SECS', required=False, default='30'))

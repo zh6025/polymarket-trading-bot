@@ -307,6 +307,19 @@ class TestLiveUpDownPrices:
         client.get_midpoint.assert_has_calls([call('tok-up'), call('tok-down')])
 
 
+class TestBalanceCheck:
+    def test_balance_check_fails_closed_on_query_error(self, tmp_path):
+        client = MagicMock()
+        client.get_balance_allowance.side_effect = RuntimeError('balance api unavailable')
+        bot = _make_bot(tmp_path, client)
+
+        assert bot._check_balance(5.0) is False
+        bot.notifier.notify.assert_called_once()
+        args, kwargs = bot.notifier.notify.call_args
+        assert '余额检查失败' in args[0]
+        assert kwargs['level'] == 'error'
+
+
 class TestMarketWonNewShape:
     def test_won_via_outcomes_array(self, tmp_path):
         client = MagicMock()
