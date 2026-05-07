@@ -205,7 +205,7 @@ cmd_preflight() {
             err "最近 1 小时日志中没有找到 '🔬 DRY-RUN:'；请继续 DRY_RUN 跑满并等到至少 1 次入场决策"
             failed=1
         fi
-        if grep -E "ERROR|余额不足|授权不足|下单失败|未找到 .*token_id|未找到 token_id" "$log_file"; then
+        if grep -E "ERROR|余额不足|授权不足|下单失败|未找到 .*token_id" "$log_file"; then
             err "最近 1 小时日志中发现错误/余额/授权/token_id 异常，请先处理"
             failed=1
         else
