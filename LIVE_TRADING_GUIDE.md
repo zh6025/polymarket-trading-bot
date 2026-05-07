@@ -230,6 +230,7 @@ bash deploy/go_live.sh preflight
 - [ ] 时间同步正常
 - [ ] 最近 1 小时日志里至少出现 1 次 `🔬 DRY-RUN: UP/DOWN @ ...` 入场决策
 - [ ] 最近 1 小时日志里没有 `ERROR`、`余额不足`、`授权不足`、`下单失败`、`未找到 token_id`
+- [ ] bot 容器已经连续运行至少 1 小时
 - [ ] `data/bot_state.json` 显示 `circuit_breaker: False`
 - [ ] 链上余额/授权检查通过
 

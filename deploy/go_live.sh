@@ -46,6 +46,16 @@ get_env_value() {
     grep -E "^${key}=" .env 2>/dev/null | tail -n 1 | cut -d= -f2-
 }
 
+set_env_value() {
+    local key="$1"
+    local value="$2"
+    if grep -qE "^${key}=" .env 2>/dev/null; then
+        sed -i.bak -E "s|^${key}=.*|${key}=${value}|" .env
+    else
+        echo "${key}=${value}" >> .env
+    fi
+}
+
 cmd_check() {
     info "===== 1) 检查代码版本 ====="
     git fetch origin main >/dev/null 2>&1 || warn "拉取 origin 失败，可能没网"
@@ -216,7 +226,36 @@ cmd_preflight() {
         failed=1
     fi
 
-    info "===== 5) 检查熔断器状态 ====="
+    info "===== 5) 检查 DRY_RUN 已运行至少 1 小时 ====="
+    local container_id started_at
+    container_id=$(docker compose ps -q bot 2>/dev/null || true)
+    if [ -z "$container_id" ]; then
+        err "bot 容器未运行；请先执行 bash deploy/go_live.sh dry 并跑满 1 小时"
+        failed=1
+    else
+        started_at=$(docker inspect -f '{{.State.StartedAt}}' "$container_id" 2>/dev/null || true)
+        if python3 - "$started_at" <<'PY'
+import datetime
+import sys
+
+started_raw = sys.argv[1]
+try:
+    started = datetime.datetime.fromisoformat(started_raw.replace('Z', '+00:00'))
+    age_seconds = int((datetime.datetime.now(datetime.timezone.utc) - started).total_seconds())
+except Exception:
+    age_seconds = -1
+print(f"dry_run_age_seconds={age_seconds}")
+sys.exit(0 if age_seconds >= 3600 else 1)
+PY
+        then
+            ok "DRY_RUN 容器已运行至少 1 小时"
+        else
+            err "DRY_RUN 还没跑满 1 小时；请继续观察日志，满 1 小时后再执行 preflight"
+            failed=1
+        fi
+    fi
+
+    info "===== 6) 检查熔断器状态 ====="
     if [ -f data/bot_state.json ]; then
         if python3 - <<'PY'
 import json
@@ -240,7 +279,7 @@ PY
         failed=1
     fi
 
-    info "===== 6) 检查链上余额/授权（只读）====="
+    info "===== 7) 检查链上余额/授权（只读）====="
     if [ -f scripts/setup_allowance.py ]; then
         if docker compose run --rm bot python3 scripts/setup_allowance.py --check; then
             ok "链上授权检查通过"
@@ -263,9 +302,10 @@ PY
 cmd_dry() {
     info "===== 切换到 DRY_RUN 模式（不下真实单）====="
     cmd_check
-    info "===== 修改 .env: DRY_RUN=true, TRADING_ENABLED=true ====="
-    sed -i.bak -E 's/^DRY_RUN=.*/DRY_RUN=true/' .env
-    sed -i.bak -E 's/^TRADING_ENABLED=.*/TRADING_ENABLED=true/' .env
+    info "===== 修改 .env: DRY_RUN=true, TRADING_ENABLED=true, BET_SIZE_USDC=1 ====="
+    set_env_value DRY_RUN true
+    set_env_value TRADING_ENABLED true
+    set_env_value BET_SIZE_USDC 1
     grep -E '^(DRY_RUN|TRADING_ENABLED|BET_SIZE_USDC)=' .env || true
     info "===== 启动 bot ====="
     docker compose up -d --build
@@ -283,12 +323,10 @@ cmd_live() {
         err "已取消"
         exit 1
     fi
-    info "===== 修改 .env: DRY_RUN=false, TRADING_ENABLED=true ====="
-    sed -i.bak -E 's/^DRY_RUN=.*/DRY_RUN=false/' .env
-    sed -i.bak -E 's/^TRADING_ENABLED=.*/TRADING_ENABLED=true/' .env
-    if ! grep -qE '^BET_SIZE_USDC=' .env; then
-        echo "BET_SIZE_USDC=1" >> .env
-    fi
+    info "===== 修改 .env: DRY_RUN=false, TRADING_ENABLED=true, BET_SIZE_USDC=1 ====="
+    set_env_value DRY_RUN false
+    set_env_value TRADING_ENABLED true
+    set_env_value BET_SIZE_USDC 1
     grep -E '^(DRY_RUN|TRADING_ENABLED|BET_SIZE_USDC)=' .env || true
     info "===== 启动 bot ====="
     docker compose up -d --build
