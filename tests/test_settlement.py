@@ -316,7 +316,7 @@ class TestBalanceCheck:
         assert bot._check_balance(5.0) is False
         bot.notifier.notify.assert_called_once()
         args, kwargs = bot.notifier.notify.call_args
-        assert '余额检查失败' in args[0]
+        assert args[0] == '余额检查失败，跳过下单: balance api unavailable'
         assert kwargs['level'] == 'error'
 
 
