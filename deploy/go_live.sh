@@ -242,7 +242,8 @@ started_raw = sys.argv[1]
 try:
     started = datetime.datetime.fromisoformat(started_raw.replace('Z', '+00:00'))
     age_seconds = int((datetime.datetime.now(datetime.timezone.utc) - started).total_seconds())
-except Exception:
+except Exception as exc:
+    print(f"dry_run_age_parse_error={exc}", file=sys.stderr)
     age_seconds = -1
 print(f"dry_run_age_seconds={age_seconds}")
 sys.exit(0 if age_seconds >= 3600 else 1)
