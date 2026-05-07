@@ -62,8 +62,8 @@ pytest tests/
    ```
 5. **上线前日志确认**：重建并重启容器后，确认日志出现 `🧾 市场详情`、当前 slug 的 `remaining` 为正数，且不会把已过期窗口打印成 `找到活跃市场`
 6. **小额验证**：先 `BET_SIZE_USDC=5`、`DRY_RUN=false` 跑 24 小时，观察 5–10 笔订单的成交、撤单、PnL 闭环
-6. **可选：Telegram 告警** — 在 `.env` 配置 `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
-7. **状态持久化** — `STATE_FILE` 默认 `bot_state.json`，已在 `docker-compose.yml` 中挂卷
+7. **可选：Telegram 告警** — 在 `.env` 配置 `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
+8. **状态持久化** — `STATE_FILE` 默认 `bot_state.json`，已在 `docker-compose.yml` 中挂卷
 
 ## 配置说明
 
