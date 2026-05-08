@@ -32,6 +32,20 @@ info() { echo -e "ℹ️  $*"; }
 
 ACTION="${1:-check}"
 
+bot_container_id() {
+    docker compose ps -q bot 2>/dev/null || true
+}
+
+print_next_steps_when_stopped() {
+    warn "当前 bot 没有运行；logs 没有输出是正常的"
+    echo "下一步："
+    echo "  1) bash deploy/go_live.sh check"
+    echo "  2) bash deploy/go_live.sh dry"
+    echo "  3) bash deploy/go_live.sh logs     # 观察至少 1 小时"
+    echo "  4) bash deploy/go_live.sh preflight"
+    echo "  5) bash deploy/go_live.sh live     # 通过 preflight 后再执行"
+}
+
 require_env_var() {
     local key="$1"
     if ! grep -qE "^${key}=.+" .env 2>/dev/null || grep -qE "^${key}=$" .env || grep -qE "^${key}=your_" .env; then
@@ -111,6 +125,11 @@ cmd_check() {
 
     info "===== 6) 检查容器状态 ====="
     docker compose ps 2>/dev/null || true
+    if [ -z "$(bot_container_id)" ]; then
+        print_next_steps_when_stopped
+    else
+        ok "bot 容器正在运行"
+    fi
 
     info "===== 7) 当前 PnL ====="
     if [ -f data/bot_state.json ]; then
@@ -311,6 +330,7 @@ cmd_dry() {
     info "===== 启动 bot ====="
     docker compose up -d --build
     ok "已启动 (DRY_RUN). 用 'bash deploy/go_live.sh logs' 看日志"
+    warn "请至少观察 1 小时，确认有市场详情、UP/DOWN 价格、token_id，且没有 ERROR/余额/授权异常，再执行 preflight"
 }
 
 cmd_live() {
@@ -343,6 +363,10 @@ cmd_stop() {
 
 cmd_logs() {
     info "===== 实时日志（Ctrl+C 退出）====="
+    if [ -z "$(bot_container_id)" ]; then
+        print_next_steps_when_stopped
+        exit 1
+    fi
     docker compose logs -f --tail=100 bot
 }
 
