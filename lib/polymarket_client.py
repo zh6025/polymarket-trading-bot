@@ -39,7 +39,7 @@ class PolymarketClient:
 
     # 默认 tick / 最小订单名义金额
     DEFAULT_TICK_SIZE = 0.01
-    MIN_ORDER_SIZE_USDC = 1.0  # Polymarket 最小订单名义金额（价格 × 数量）
+    MIN_ORDER_SIZE_USDC = 1.0  # place_order 校验的 Polymarket 最小订单名义金额（价格 × 数量）
     BTC_5M_WINDOW_SECONDS = 300
     # Search previous/current/next three 5-minute slugs to tolerate clock/API boundary drift.
     MARKET_SEARCH_OFFSETS_SECONDS = [-300, 0, 300, 600, 900]
