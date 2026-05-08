@@ -37,9 +37,9 @@ class PolymarketClient:
     BASE_URL = "https://clob.polymarket.com"
     GAMMA_BASE_URL = "https://gamma-api.polymarket.com"
 
-    # 默认 tick / 最小订单
+    # 默认 tick / 最小订单名义金额
     DEFAULT_TICK_SIZE = 0.01
-    MIN_ORDER_SIZE_USDC = 1.0  # Polymarket 最小订单金额
+    MIN_ORDER_SIZE_USDC = 1.0  # Polymarket 最小订单名义金额（价格 × 数量）
     BTC_5M_WINDOW_SECONDS = 300
     # Search previous/current/next three 5-minute slugs to tolerate clock/API boundary drift.
     MARKET_SEARCH_OFFSETS_SECONDS = [-300, 0, 300, 600, 900]
