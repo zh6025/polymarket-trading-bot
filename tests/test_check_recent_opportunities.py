@@ -36,6 +36,7 @@ def test_analyze_lines_counts_time_and_price_skips():
     assert summary.price_window_low == 0.55
     assert summary.price_window_high == 0.6
     assert summary.closest_to_price_window == 0.395
+    assert summary.closest_price_to_window == 0.995
 
 
 def test_analyze_lines_counts_order_flow():

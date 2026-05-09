@@ -47,6 +47,7 @@ class Summary:
     fail_lines: int = 0
     balance_lines: int = 0
     closest_to_price_window: float | None = None
+    closest_price_to_window: float | None = None
     price_window_low: float | None = None
     price_window_high: float | None = None
     entry_window_low: int | None = None
@@ -95,8 +96,9 @@ def analyze_lines(lines: Iterable[str]) -> Summary:
                     summary.price_window_low = low
                     summary.price_window_high = high
                     distance = _distance_to_window(price, low, high)
-                    if summary.closest_to_price_window is None or distance <= summary.closest_to_price_window:
+                    if summary.closest_to_price_window is None or distance < summary.closest_to_price_window:
                         summary.closest_to_price_window = distance
+                        summary.closest_price_to_window = price
                 else:
                     summary.other_skips += 1
 
@@ -170,7 +172,10 @@ def print_summary(summary: Summary, hours: int) -> None:
     if summary.price_window_low is not None and summary.price_window_high is not None:
         print(f"检测到价格窗口: [{summary.price_window_low}, {summary.price_window_high}]")
     if summary.closest_to_price_window is not None:
-        print(f"距离价格窗口最近差值: {summary.closest_to_price_window:.3f}")
+        print(
+            f"距离价格窗口最近差值: {summary.closest_to_price_window:.3f}"
+            f" (价格={summary.closest_price_to_window:.3f})"
+        )
 
     print()
     if summary.bet_lines == 0 and summary.order_lines == 0:
