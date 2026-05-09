@@ -62,5 +62,12 @@ def test_analyze_lines_counts_order_flow():
 def test_rejects_invalid_compose_service_name():
     module = _load_module()
 
-    with pytest.raises(ValueError):
-        module._read_docker_logs(12, "bot;rm -rf /")
+    bad_names = [
+        "bot;rm -rf /",
+        "bot`whoami`",
+        "bot|ls",
+        "bot\nrm",
+    ]
+    for name in bad_names:
+        with pytest.raises(ValueError):
+            module._read_docker_logs(12, name)

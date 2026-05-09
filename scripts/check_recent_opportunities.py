@@ -95,7 +95,7 @@ def analyze_lines(lines: Iterable[str]) -> Summary:
                     summary.price_window_low = low
                     summary.price_window_high = high
                     distance = _distance_to_window(price, low, high)
-                    if summary.closest_to_price_window is None or distance < summary.closest_to_price_window:
+                    if summary.closest_to_price_window is None or distance <= summary.closest_to_price_window:
                         summary.closest_to_price_window = distance
                 else:
                     summary.other_skips += 1
