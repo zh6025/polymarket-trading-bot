@@ -2,7 +2,9 @@
 node_modules
 .env
 .env.*
-scripts/
+scripts/*
+!scripts/setup_allowance.py
+!scripts/check_recent_opportunities.py
 __pycache__/
 *.db
 bot_state.json
