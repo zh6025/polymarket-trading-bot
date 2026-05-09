@@ -21,22 +21,23 @@ def test_analyze_lines_counts_time_and_price_skips():
         "[INFO] 🎯 信号: action=SKIP | 时间窗口不符: 剩余40s 不在 [25, 35]s",
         "[INFO] 📊 价格: UP=0.995 DOWN=0.005",
         "[INFO] 🎯 信号: action=SKIP | 份额价格0.995不在窗口[0.55, 0.6]",
+        "[INFO] 🎯 信号: action=SKIP | 份额价格0.625不在窗口[0.55, 0.6]",
         "[INFO] 💵 USDC 余额=10.0000 授权额度=10.0000 需要=1.0000",
     ]
 
     summary = module.analyze_lines(lines)
 
     assert summary.price_samples == 2
-    assert summary.signal_samples == 2
+    assert summary.signal_samples == 3
     assert summary.skip_time_window == 1
-    assert summary.skip_price_window == 1
+    assert summary.skip_price_window == 2
     assert summary.balance_lines == 1
     assert summary.entry_window_low == 25
     assert summary.entry_window_high == 35
     assert summary.price_window_low == 0.55
     assert summary.price_window_high == 0.6
-    assert summary.min_distance_to_price_window == 0.395
-    assert summary.price_with_min_distance == 0.995
+    assert summary.min_distance_to_price_window == 0.025
+    assert summary.price_with_min_distance == 0.625
 
 
 def test_analyze_lines_counts_order_flow():

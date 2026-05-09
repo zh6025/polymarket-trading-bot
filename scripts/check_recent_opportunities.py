@@ -56,6 +56,7 @@ class Summary:
 
 
 def _distance_to_window(value: float, low: float, high: float) -> float:
+    """Return distance to the nearest window edge, or 0.0 when value is inside."""
     if value < low:
         return low - value
     if value > high:
@@ -96,7 +97,10 @@ def analyze_lines(lines: Iterable[str]) -> Summary:
                     summary.price_window_low = low
                     summary.price_window_high = high
                     distance = _distance_to_window(price, low, high)
-                    if summary.min_distance_to_price_window is None or distance < summary.min_distance_to_price_window:
+                    if distance > 0 and (
+                        summary.min_distance_to_price_window is None
+                        or distance < summary.min_distance_to_price_window
+                    ):
                         summary.min_distance_to_price_window = distance
                         summary.price_with_min_distance = price
                 else:
