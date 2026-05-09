@@ -2,6 +2,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _load_module():
     path = Path(__file__).resolve().parents[1] / "scripts" / "check_recent_opportunities.py"
@@ -55,3 +57,10 @@ def test_analyze_lines_counts_order_flow():
     assert summary.order_lines == 1
     assert summary.filled_lines == 1
     assert summary.fail_lines == 1
+
+
+def test_rejects_invalid_compose_service_name():
+    module = _load_module()
+
+    with pytest.raises(ValueError):
+        module._read_docker_logs(12, "bot;rm -rf /")

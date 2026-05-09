@@ -29,6 +29,7 @@ FILLED_RE = re.compile(r"🎯 订单已完全成交")
 FAIL_RE = re.compile(r"订单超时|撤单|下单失败")
 BALANCE_RE = re.compile(r"余额|授权")
 DRY_RUN_RE = re.compile(r"🔬 DRY-RUN")
+SERVICE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 @dataclass
@@ -116,6 +117,8 @@ def analyze_lines(lines: Iterable[str]) -> Summary:
 
 
 def _read_docker_logs(hours: int, service: str) -> list[str]:
+    if not SERVICE_RE.fullmatch(service):
+        raise ValueError(f"invalid docker compose service name: {service!r}")
     cmd = [
         "docker",
         "compose",
@@ -133,7 +136,12 @@ def _read_docker_logs(hours: int, service: str) -> list[str]:
 
 def _read_lines(args: argparse.Namespace) -> list[str]:
     if args.log_file:
-        return Path(args.log_file).read_text(encoding="utf-8").splitlines()
+        log_path = Path(args.log_file)
+        if not log_path.exists():
+            raise FileNotFoundError(f"log file not found: {log_path}")
+        if not log_path.is_file():
+            raise ValueError(f"log path is not a file: {log_path}")
+        return log_path.read_text(encoding="utf-8").splitlines()
     return _read_docker_logs(args.hours, args.service)
 
 
