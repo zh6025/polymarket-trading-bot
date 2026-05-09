@@ -36,7 +36,7 @@ def test_analyze_lines_counts_time_and_price_skips():
     assert summary.entry_window_high == 35
     assert summary.price_window_low == 0.55
     assert summary.price_window_high == 0.6
-    assert summary.min_distance_to_price_window == 0.025
+    assert summary.min_distance_to_price_window == pytest.approx(0.025)
     assert summary.price_with_min_distance == 0.625
 
 
