@@ -45,8 +45,6 @@ class Summary:
     filled_lines: int = 0
     fail_lines: int = 0
     balance_lines: int = 0
-    entry_window_samples: int = 0
-    price_window_samples: int = 0
     closest_to_price_window: float | None = None
     price_window_low: float | None = None
     price_window_high: float | None = None
@@ -90,7 +88,6 @@ def analyze_lines(lines: Iterable[str]) -> Summary:
                     summary.entry_window_high = int(time_match.group("high"))
                 elif price_match:
                     summary.skip_price_window += 1
-                    summary.entry_window_samples += 1
                     price = float(price_match.group("price"))
                     low = float(price_match.group("low"))
                     high = float(price_match.group("high"))
@@ -99,8 +96,6 @@ def analyze_lines(lines: Iterable[str]) -> Summary:
                     distance = _distance_to_window(price, low, high)
                     if summary.closest_to_price_window is None or distance < summary.closest_to_price_window:
                         summary.closest_to_price_window = distance
-                    if distance == 0:
-                        summary.price_window_samples += 1
                 else:
                     summary.other_skips += 1
 
