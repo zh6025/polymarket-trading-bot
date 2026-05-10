@@ -74,7 +74,7 @@ pytest tests/
 | `DAILY_LOSS_LIMIT_USDC` | `20` | 每日最大亏损触发熔断 |
 | `DAILY_TRADE_LIMIT` | `20` | 每日最大交易次数 |
 | `CONSECUTIVE_LOSS_LIMIT` | `3` | 连续亏损上限 |
-| `SNIPER_ENTRY_SECS` | `60` | 距窗口结束 1 到 N 秒内允许评估入场 |
+| `SNIPER_ENTRY_SECS` | `60` | 距窗口结束最后 N 秒内允许评估入场（从第 1 秒到配置值） |
 | `HARD_STOP_SEC` | `30` | 到期前N秒硬停不入场 |
 | `POLLING_INTERVAL` | `5000` | 轮询间隔（毫秒） |
 
