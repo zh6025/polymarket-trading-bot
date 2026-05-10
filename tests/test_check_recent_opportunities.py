@@ -18,7 +18,7 @@ def test_analyze_lines_counts_time_and_price_skips():
     module = _load_module()
     lines = [
         "[INFO] 📊 价格: UP=0.995 DOWN=0.005",
-        "[INFO] 🎯 信号: action=SKIP | 时间窗口不符: 剩余40s 不在 [25, 35]s",
+        "[INFO] 🎯 信号: action=SKIP | 时间窗口不符: 剩余80s 不在 [1, 60]s",
         "[INFO] 📊 价格: UP=0.995 DOWN=0.005",
         "[INFO] 🎯 信号: action=SKIP | 份额价格0.995不在窗口[0.55, 0.6]",
         "[INFO] 🎯 信号: action=SKIP | 份额价格0.625不在窗口[0.55, 0.6]",
@@ -32,8 +32,8 @@ def test_analyze_lines_counts_time_and_price_skips():
     assert summary.skip_time_window == 1
     assert summary.skip_price_window == 2
     assert summary.balance_lines == 1
-    assert summary.entry_window_low == 25
-    assert summary.entry_window_high == 35
+    assert summary.entry_window_low == 1
+    assert summary.entry_window_high == 60
     assert summary.price_window_low == 0.55
     assert summary.price_window_high == 0.6
     assert summary.min_distance_to_price_window == pytest.approx(0.025)
