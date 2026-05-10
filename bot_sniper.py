@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 bot_sniper.py — 末端狙击机器人
-策略：在BTC 5分钟窗口结束前约30秒入场，只在55%-60%份额价格区间买入，
+策略：在BTC 5分钟窗口结束前最后60秒内入场，只在55%-60%份额价格区间买入，
 结合Binance实时价格动量确认，使用半Kelly公式计算下注比例。
 """
 import asyncio
@@ -555,8 +555,8 @@ def main():
         feed = BinanceFeed()
         strategy = SniperStrategy(
             entry_secs=config.sniper_entry_secs,
-            entry_window_low=config.sniper_entry_secs - 5,
-            entry_window_high=config.sniper_entry_secs + 5,
+            entry_window_low=1,
+            entry_window_high=config.sniper_entry_secs,
             price_min=config.sniper_price_min,
             price_max=config.sniper_price_max,
             min_delta_bps=config.sniper_min_delta_bps,

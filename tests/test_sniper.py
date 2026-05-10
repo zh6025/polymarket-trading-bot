@@ -90,9 +90,9 @@ class TestBinanceFeed:
 # ---------------------------------------------------------------------------
 def make_strategy(**kwargs):
     defaults = dict(
-        entry_secs=30,
-        entry_window_low=25,
-        entry_window_high=35,
+        entry_secs=60,
+        entry_window_low=1,
+        entry_window_high=60,
         price_min=0.55,
         price_max=0.60,
         min_delta_bps=2.0,
@@ -116,7 +116,7 @@ class TestSniperTimeWindow:
     def test_skip_when_too_early(self):
         strat = make_strategy()
         result = strat.evaluate(
-            remaining_seconds=100,  # > entry_window_high=35
+            remaining_seconds=100,  # > entry_window_high=60
             window_open_price=50000,
             current_btc_price=50100,
             up_price=0.57,
@@ -128,7 +128,7 @@ class TestSniperTimeWindow:
     def test_skip_when_too_late(self):
         strat = make_strategy()
         result = strat.evaluate(
-            remaining_seconds=10,  # < entry_window_low=25
+            remaining_seconds=0,  # < entry_window_low=1
             window_open_price=50000,
             current_btc_price=50100,
             up_price=0.57,
@@ -284,7 +284,7 @@ class TestSniperKelly:
     def test_edge_at_least_time_bonus(self):
         """edge = estimated_prob - entry_price + time_bonus
         When entry_price == estimated_prob (share price is both), edge = time_bonus.
-        For remaining_seconds=30: time_bonus = (35-30)*0.001 = 0.005"""
+        For remaining_seconds=30: time_bonus = (60-30)*0.001 = 0.030"""
         strat = make_strategy()
         result = strat.evaluate(
             remaining_seconds=30,
@@ -294,8 +294,8 @@ class TestSniperKelly:
             down_price=0.43,
         )
         assert result['action'] == 'BUY_UP'
-        # estimated_prob == entry_price == 0.57, so edge = 0 + time_bonus = 0.005
-        assert result['edge'] >= 0.005
+        # estimated_prob == entry_price == 0.57, so edge = 0 + time_bonus = 0.030
+        assert result['edge'] >= 0.03
 
 
 class TestSniperInvalidInputs:

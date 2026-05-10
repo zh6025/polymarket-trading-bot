@@ -57,7 +57,7 @@ class Config:
         self.bet_size_usdc = float(self.get_env_variable('BET_SIZE_USDC', required=False, default='3.0'))
 
         # ---- 末端狙击策略配置 ----
-        self.sniper_entry_secs = int(self.get_env_variable('SNIPER_ENTRY_SECS', required=False, default='30'))
+        self.sniper_entry_secs = int(self.get_env_variable('SNIPER_ENTRY_SECS', required=False, default='60'))
         self.sniper_price_min = float(self.get_env_variable('SNIPER_PRICE_MIN', required=False, default='0.55'))
         self.sniper_price_max = float(self.get_env_variable('SNIPER_PRICE_MAX', required=False, default='0.60'))
         self.sniper_min_delta_bps = float(self.get_env_variable('SNIPER_MIN_DELTA_BPS', required=False, default='2.0'))

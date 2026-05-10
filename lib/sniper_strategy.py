@@ -1,6 +1,6 @@
 """
 SniperStrategy: 末端狙击策略核心
-- 在窗口结束前25-35秒的时间窗评估入场信号
+- 在窗口结束前最后60秒内评估入场信号
 - 直接基于Polymarket份额价格判断方向（哪个份额价格更高市场就预期那个方向）
 - 只在份额价格 0.55-0.60 区间生成买入信号
 - 使用半Kelly公式计算最优下注比例
@@ -33,9 +33,9 @@ class SniperStrategy:
 
     def __init__(
         self,
-        entry_secs: int = 30,
-        entry_window_low: int = 25,
-        entry_window_high: int = 35,
+        entry_secs: int = 60,
+        entry_window_low: int = 1,
+        entry_window_high: int = 60,
         price_min: float = 0.55,
         price_max: float = 0.60,
         min_delta_bps: float = 2.0,
@@ -147,8 +147,8 @@ class SniperStrategy:
         # 概率估算：直接用份额价格作为市场隐含概率
         estimated_prob = market_prob
 
-        # Edge计算：给一个小的时间衰减bonus（最后30秒翻转概率低）
-        time_bonus = max(0.0, (35 - remaining_seconds) * 0.001)
+        # Edge计算：给一个小的时间衰减bonus（越接近结束翻转概率越低）
+        time_bonus = max(0.0, (self.entry_window_high - remaining_seconds) * 0.001)
         edge = estimated_prob - entry_price + time_bonus
 
         if edge <= 0:

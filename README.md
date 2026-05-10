@@ -74,7 +74,7 @@ pytest tests/
 | `DAILY_LOSS_LIMIT_USDC` | `20` | 每日最大亏损触发熔断 |
 | `DAILY_TRADE_LIMIT` | `20` | 每日最大交易次数 |
 | `CONSECUTIVE_LOSS_LIMIT` | `3` | 连续亏损上限 |
-| `SNIPER_ENTRY_WINDOW_SEC` | `60` | 末端入场时间窗口（秒） |
+| `SNIPER_ENTRY_SECS` | `60` | 末端入场时间窗口（秒） |
 | `HARD_STOP_SEC` | `30` | 到期前N秒硬停不入场 |
 | `POLLING_INTERVAL` | `5000` | 轮询间隔（毫秒） |
 
@@ -82,7 +82,7 @@ pytest tests/
 
 ### 末端狙击策略（Kelly公式 + 动量确认）
 
-在每个5分钟窗口末端 `SNIPER_ENTRY_WINDOW_SEC` 秒内入场：
+在每个5分钟窗口末端 `SNIPER_ENTRY_SECS` 秒内入场：
 
 1. **时机选择**：只在窗口末端（默认最后60秒）入场，胜率更高
 2. **动量确认**：通过 Binance 实时价格确认 BTC 动量方向
