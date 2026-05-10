@@ -21,7 +21,7 @@ from typing import Iterable
 
 PRICE_RE = re.compile(r"📊 价格:\s*UP=(?P<up>[0-9.]+)\s+DOWN=(?P<down>[0-9.]+)")
 SIGNAL_RE = re.compile(r"🎯 信号:\s*action=(?P<action>[A-Z_]+)\s*\|\s*(?P<reason>.*)")
-TIME_SKIP_RE = re.compile(r"剩余(?P<remaining>\d+)s\s+不在\s+\[(?P<low>\d+),\s*(?P<high>\d+)\]s")
+TIME_SKIP_RE = re.compile(r"剩余(?P<remaining>[0-9.]+)s\s+不在\s+\[(?P<low>\d+),\s*(?P<high>\d+)\]s")
 PRICE_SKIP_RE = re.compile(r"份额价格(?P<price>[0-9.]+)不在窗口\[(?P<low>[0-9.]+),\s*(?P<high>[0-9.]+)\]")
 BET_RE = re.compile(r"💰 下注:")
 ORDER_SEND_RE = re.compile(r"📤 下单|✅ 订单响应|✅ 订单已提交")
