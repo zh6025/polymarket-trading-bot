@@ -295,7 +295,7 @@ class TestSniperKelly:
         )
         assert result['action'] == 'BUY_UP'
         # estimated_prob == entry_price == 0.57, so edge = 0 + time_bonus = 0.030
-        assert result['edge'] >= 0.03
+        assert result['edge'] >= 0.030
 
 
 class TestSniperInvalidInputs:
