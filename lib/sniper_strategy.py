@@ -147,7 +147,7 @@ class SniperStrategy:
         # 概率估算：直接用份额价格作为市场隐含概率
         estimated_prob = market_prob
 
-        # Edge计算：越接近结束时间风险越低，给予更高的微小 bonus
+        # Edge计算：越接近结束（remaining_seconds 越小）时间风险越低，给予更高的微小 bonus
         time_bonus = max(0.0, (self.entry_window_high - remaining_seconds) * 0.001)
         edge = estimated_prob - entry_price + time_bonus
 
