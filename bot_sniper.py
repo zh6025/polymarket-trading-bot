@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 bot_sniper.py — 末端狙击机器人
-策略：在BTC 5分钟窗口结束前约30秒入场，只在55%-60%份额价格区间买入，
+策略：在BTC 5分钟窗口结束前约60秒入场，只在55%-60%份额价格区间买入，
 结合Binance实时价格动量确认，使用半Kelly公式计算下注比例。
 """
 import asyncio
@@ -294,6 +294,16 @@ class SniperBot:
         edge = signal['edge']
         estimated_prob = signal['estimated_prob']
 
+        token_id = up_token_id if direction == 'UP' else down_token_id
+        if not token_id:
+            log_error(f"未找到 {direction} 方向的token_id，跳过")
+            return
+
+        executable_price = self._select_buy_execution_price(token_id, entry_price)
+        if executable_price is None:
+            return
+        entry_price = executable_price
+
         log_info(f"💰 下注: {direction} @ {entry_price:.3f} "
                  f"size={bet_size:.2f} USDC "
                  f"edge={edge:.3f} "
@@ -301,10 +311,6 @@ class SniperBot:
 
         # 11. 执行下单
         order_id: Optional[str] = None
-        token_id = up_token_id if direction == 'UP' else down_token_id
-        if not token_id:
-            log_error(f"未找到 {direction} 方向的token_id，跳过")
-            return
 
         # 计算份额数量：USDC 预算 / 价格 = 份额数（Polymarket size 是份额数）
         share_size = bet_size / entry_price if entry_price > 0 else 0
@@ -389,6 +395,34 @@ class SniperBot:
         except Exception as e:
             log_warn(f"余额检查失败（继续下单）: {e}")
             return True
+
+    def _select_buy_execution_price(self, token_id: str, signal_price: float) -> Optional[float]:
+        """用当前 CLOB 卖一价作为 BUY 限价，避免挂在中间价导致不成交。"""
+        try:
+            book = self.client.get_orderbook(token_id)
+            px = self.client.calculate_mid_price(book)
+            best_ask = px.get('ask') if isinstance(px, dict) else None
+            if best_ask is None:
+                log_warn(f"无法读取卖一价，使用信号价下单: {signal_price:.3f}")
+                return signal_price
+            best_ask = float(best_ask)
+            if not (0 < best_ask < 1):
+                log_warn(f"卖一价无效 ask={best_ask}，使用信号价下单: {signal_price:.3f}")
+                return signal_price
+            if best_ask > self.strategy.price_max:
+                log_warn(
+                    f"卖一价 {best_ask:.3f} 超过策略上限 {self.strategy.price_max:.3f}，跳过避免追高"
+                )
+                return None
+            execution_price = max(signal_price, best_ask)
+            if execution_price > signal_price:
+                log_info(
+                    f"📌 使用可成交卖一价下单: signal={signal_price:.3f} ask={best_ask:.3f}"
+                )
+            return execution_price
+        except Exception as e:
+            log_warn(f"获取卖一价失败，使用信号价下单: {e}")
+            return signal_price
 
     async def _monitor_order(self, order_id: str, window_end_ts: int):
         """下单后短轮询：每 1s 查询，未成交且接近窗口结束就撤单。"""

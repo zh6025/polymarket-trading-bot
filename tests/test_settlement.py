@@ -291,3 +291,40 @@ class TestMarketWonNewShape:
         assert bot._market_won('slug-x', 'tok-up', 'UP') is False
         assert bot._market_won('slug-x', 'tok-down', 'DOWN') is True
 
+
+class TestExecutionPrice:
+    def test_uses_best_ask_when_signal_price_would_not_cross_spread(self, tmp_path):
+        client = MagicMock()
+        client.get_orderbook.return_value = {
+            'bids': [{'price': '0.56'}],
+            'asks': [{'price': '0.58'}],
+        }
+        client.calculate_mid_price.return_value = {'bid': 0.56, 'ask': 0.58, 'mid': 0.57}
+        bot = _make_bot(tmp_path, client)
+        bot.strategy.price_max = 0.60
+
+        assert bot._select_buy_execution_price('tok-up', 0.57) == 0.58
+
+    def test_keeps_signal_price_when_it_already_crosses_best_ask(self, tmp_path):
+        client = MagicMock()
+        client.get_orderbook.return_value = {
+            'bids': [{'price': '0.55'}],
+            'asks': [{'price': '0.56'}],
+        }
+        client.calculate_mid_price.return_value = {'bid': 0.55, 'ask': 0.56, 'mid': 0.555}
+        bot = _make_bot(tmp_path, client)
+        bot.strategy.price_max = 0.60
+
+        assert bot._select_buy_execution_price('tok-up', 0.57) == 0.57
+
+    def test_skips_when_best_ask_exceeds_strategy_cap(self, tmp_path):
+        client = MagicMock()
+        client.get_orderbook.return_value = {
+            'bids': [{'price': '0.59'}],
+            'asks': [{'price': '0.62'}],
+        }
+        client.calculate_mid_price.return_value = {'bid': 0.59, 'ask': 0.62, 'mid': 0.605}
+        bot = _make_bot(tmp_path, client)
+        bot.strategy.price_max = 0.60
+
+        assert bot._select_buy_execution_price('tok-up', 0.57) is None

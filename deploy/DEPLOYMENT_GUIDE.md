@@ -56,6 +56,6 @@ sudo journalctl -u polymarket-bot -n 50 --no-pager
 ```
 TRADING_ENABLED=true   # 解除安全锁
 DRY_RUN=false          # 关闭模拟模式
-BET_SIZE_USDC=3.0      # 每次下注金额
+BET_SIZE_USDC=5.0      # 每次下注金额（低于 Polymarket 最小订单会被拒绝）
 DAILY_LOSS_LIMIT_USDC=20  # 每日最大亏损
 ```
